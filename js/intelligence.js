@@ -1120,6 +1120,181 @@ export async function listRoadmapFiles(opts = {}) {
 }
 
 /**
+ * Executable vault_entry check for roadmap verification.
+ * path examples:
+ *   grimoire-local/roadmaps
+ *   grimoire-local/roadmaps/my-slug.md
+ *   grimoire-local/roadmaps/*.md
+ */
+export async function checkVaultEntry(vaultPath, opts = {}) {
+  const raw = String(vaultPath || opts.path || "").trim().replace(/^\/+/, "");
+  if (!raw) {
+    return {
+      result: "blocked",
+      evidence: "vault_entry: no path specified",
+    };
+  }
+  const focusId = opts.focusId || null;
+
+  // Memory short-circuit for roadmap files
+  const roadmapsPrefix = `${GLYPH_DIR}/${ROADMAP_SUB}`;
+  if (
+    raw === roadmapsPrefix ||
+    raw === `${roadmapsPrefix}/` ||
+    raw === "grimoire-local/roadmaps"
+  ) {
+    try {
+      const dir = await ensureRoadmapsDirectory(focusId);
+      if (dir) {
+        return {
+          result: "pass",
+          evidence: "vault: grimoire-local/roadmaps/ present (filesystem)",
+        };
+      }
+    } catch {
+      /* fall through */
+    }
+    if (roadmapMemory.size > 0) {
+      return {
+        result: "pass",
+        evidence: `vault: roadmaps in memory (${roadmapMemory.size}) — disk dir not linked`,
+      };
+    }
+    return {
+      result: "blocked",
+      evidence: "vault: roadmaps directory not available (link vault or create a roadmap first)",
+    };
+  }
+
+  // Specific roadmap markdown
+  const mdMatch = raw.match(
+    /(?:grimoire-local\/)?roadmaps\/([^/]+?)(?:\.md)?$/i
+  );
+  if (mdMatch || /\.md$/i.test(raw)) {
+    const slug = (mdMatch ? mdMatch[1] : raw.replace(/\.md$/i, ""))
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .slice(0, 64);
+    const read = await readRoadmapFile(slug, { focusId });
+    if (read.ok && read.content) {
+      return {
+        result: "pass",
+        evidence: `vault: ${read.path || slug} via ${read.method} (${read.content.length} bytes)`,
+      };
+    }
+    if (roadmapMemory.has(slug)) {
+      return {
+        result: "pass",
+        evidence: `vault: ${slug}.md in memory fallback`,
+      };
+    }
+    return {
+      result: "fail",
+      evidence: `vault: missing roadmap ${slug}.md (run plan once to persist)`,
+    };
+  }
+
+  // Wildcard list
+  if (/\*$/.test(raw) || raw.endsWith("/*.md")) {
+    const listed = await listRoadmapFiles({ focusId });
+    if (listed.length) {
+      return {
+        result: "pass",
+        evidence: `vault: ${listed.length} roadmap file(s): ${listed.slice(0, 5).join(", ")}`,
+      };
+    }
+    return {
+      result: "fail",
+      evidence: "vault: no roadmap files found",
+    };
+  }
+
+  // Generic path under vault root
+  try {
+    const root = await getVaultRoot(focusId);
+    if (!root) {
+      return {
+        result: "blocked",
+        evidence: `vault: not linked — cannot probe ${raw}`,
+      };
+    }
+    const parts = raw.split("/").filter(Boolean);
+    let dir = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      if (isLast && /\.\w+$/.test(part)) {
+        try {
+          const fh = await dir.getFileHandle(part, { create: false });
+          const file = await fh.getFile();
+          return {
+            result: "pass",
+            evidence: `vault file ${raw} (${file.size} bytes)`,
+          };
+        } catch {
+          return { result: "fail", evidence: `vault missing file ${raw}` };
+        }
+      }
+      try {
+        dir = await dir.getDirectoryHandle(part, { create: false });
+      } catch {
+        return {
+          result: "fail",
+          evidence: `vault missing directory segment: ${part}`,
+        };
+      }
+    }
+    return { result: "pass", evidence: `vault directory ${raw} present` };
+  } catch (err) {
+    return {
+      result: "blocked",
+      evidence: `vault probe error: ${err?.message || err}`,
+    };
+  }
+}
+
+/**
+ * Persist a verification report next to the roadmap (append-only log file).
+ * Path: grimoire-local/roadmaps/[slug].verify.md
+ */
+export async function writeVerificationReportFile(slug, reportMarkdown, opts = {}) {
+  const s = String(slug || "roadmap")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .slice(0, 64);
+  const fileName = `${s}.verify.md`;
+  const relPath = `${GLYPH_DIR}/${ROADMAP_SUB}/${fileName}`;
+  const content = String(reportMarkdown || "").trimEnd() + "\n";
+  const focusId = opts.focusId || null;
+
+  // Memory: store under slug+".verify"
+  roadmapMemory.set(`${s}.verify`, content);
+
+  try {
+    const dir = await ensureRoadmapsDirectory(focusId);
+    if (dir) {
+      const fh = await dir.getFileHandle(fileName, { create: true });
+      let existing = "";
+      try {
+        existing = await (await fh.getFile()).text();
+      } catch {
+        existing = "";
+      }
+      // Append new report under a separator (history), keep last full body first
+      const next = existing.trim()
+        ? `${content.trimEnd()}\n\n---\n\n## Prior run\n\n${existing.trim()}\n`
+        : content;
+      const w = await fh.createWritable();
+      await w.write(next);
+      await w.close();
+      roadmapMemory.set(`${s}.verify`, next);
+      return { ok: true, method: "filesystem", path: relPath };
+    }
+  } catch (err) {
+    console.warn("writeVerificationReportFile", err);
+  }
+  return { ok: true, method: "memory", path: relPath };
+}
+
+/**
  * Glyphs that apply to a spell (linked on spell + matching target/kind on focus).
  */
 export function glyphsForSpell(focus, spell) {

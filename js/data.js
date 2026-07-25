@@ -2850,6 +2850,12 @@ export function parseRoadmapCommand(text) {
     };
   }
 
+  // /roadmap verify [slug]
+  const verify = rest.match(/^verify(?:\s+(\S+))?$/i);
+  if (verify) {
+    return { op: "verify", slug: verify[1] || null, raw };
+  }
+
   const stepStatus = rest.match(
     /^step\s+(\d+)\s+(pending|in-progress|in_progress|complete|done|blocked|wip|active)$/i
   );
@@ -3096,12 +3102,15 @@ export function generateRoadmapFromDescription(text, opts = {}) {
     },
   ];
 
-  // Renumber steps globally
+  // Renumber steps globally + attach executable checks
   let n = 0;
   for (const ph of phases) {
     for (const st of ph.steps) {
       n += 1;
       st.n = n;
+      st.verified = false;
+      st.verification = null;
+      st.checks = ensureStepChecks(st, { slug: slugBase, title });
     }
   }
 
@@ -3293,6 +3302,14 @@ export function parseScrollRoadmap(markdown, opts = {}) {
     });
   }
 
+  for (const ph of phases) {
+    for (const st of ph.steps || []) {
+      st.verified = false;
+      st.verification = null;
+      st.checks = ensureStepChecks(st, { slug, title });
+    }
+  }
+
   const fileTargets = [
     ...new Set(phases.flatMap((p) => p.steps.flatMap((s) => s.files || []))),
   ];
@@ -3379,12 +3396,57 @@ export function expandRoadmapStep(roadmap, stepN, detail) {
   return roadmap;
 }
 
-export function setRoadmapStepStatus(roadmap, stepN, status) {
+/**
+ * Whether a step may be marked complete (human gate after real verification).
+ * Requires last verification result === pass.
+ */
+export function canMarkStepComplete(step) {
+  if (!step) return false;
+  if (step.verified === true && step.verification?.result === "pass") return true;
+  // All executable checks present and last run passed
+  if (
+    step.verification?.result === "pass" &&
+    Array.isArray(step.verification?.checks) &&
+    step.verification.checks.length > 0 &&
+    step.verification.checks.every((c) => c.result === "pass")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Set step status. Complete is gated: must be verified pass unless opts.force.
+ * @returns {{ ok: boolean, roadmap?: object, reason?: string, step?: object }|null}
+ *   null only when step not found (legacy). Prefer checking .ok.
+ */
+export function setRoadmapStepStatus(roadmap, stepN, status, opts = {}) {
   if (!roadmap) return null;
   const found = findRoadmapStep(roadmap, stepN);
   if (!found) return null;
   const next = normalizeRoadmapStatus(status);
+
+  if (next === "complete" && !opts.force) {
+    if (!canMarkStepComplete(found.step)) {
+      return {
+        ok: false,
+        reason: "unverified",
+        step: found.step,
+        roadmap,
+        message:
+          `Step ${stepN} cannot be marked complete until verification passes. ` +
+          `Run \`/roadmap verify\` first.`,
+      };
+    }
+  }
+
   found.step.status = next;
+  if (next !== "complete") {
+    // Demoting complete clears verified flag only when explicitly reopened
+    if (next === "pending" || next === "in-progress") {
+      /* keep verification evidence; just change status */
+    }
+  }
   const at = new Date().toISOString();
   if (!Array.isArray(roadmap.iterations)) roadmap.iterations = [];
   roadmap.iterations.push({
@@ -3392,6 +3454,7 @@ export function setRoadmapStepStatus(roadmap, stepN, status) {
     kind: "step_status",
     step: Number(stepN),
     status: next,
+    verified: found.step.verified === true,
   });
   // Roll phase status
   const steps = found.phase.steps || [];
@@ -3409,7 +3472,7 @@ export function setRoadmapStepStatus(roadmap, stepN, status) {
     if (roadmap.status === "pending") roadmap.status = "in-progress";
   }
   roadmap.updatedAt = at;
-  return roadmap;
+  return { ok: true, roadmap, step: found.step };
 }
 
 export function setRoadmapStatus(roadmap, status) {
@@ -3485,9 +3548,31 @@ export function formatRoadmapMarkdown(roadmap) {
       }
       lines.push("Acceptance:");
       for (const a of st.acceptance || []) {
-        lines.push(`- [ ] ${a}`);
+        const done =
+          st.verified && st.verification?.result === "pass" ? "[x]" : "[ ]";
+        lines.push(`- ${done} ${a}`);
       }
       lines.push("");
+      const checks = ensureStepChecks(st, roadmap);
+      if (checks.length) {
+        lines.push("Checks (executable):");
+        for (const c of checks) {
+          const mark =
+            c.result === "pass" ? "PASS" : c.result === "fail" ? "FAIL" : c.result === "blocked" ? "BLOCKED" : "pending";
+          lines.push(
+            `- \`${c.kind}\` ${c.path || c.vaultPath || ""}${
+              c.pattern ? ` /${c.pattern}/` : ""
+            } — ${mark}${c.evidence ? ` · ${c.evidence}` : ""}`
+          );
+        }
+        lines.push("");
+      }
+      if (st.verification) {
+        lines.push(
+          `Verification: **${st.verification.result || "unknown"}** _${st.verification.at || ""}_`
+        );
+        lines.push("");
+      }
       if (st.expansions?.length) {
         lines.push("Expansions:");
         for (const ex of st.expansions) {
@@ -3511,6 +3596,11 @@ export function formatRoadmapMarkdown(roadmap) {
         lines.push(`### [${it.at}] step ${it.step} → ${it.status}`);
       } else if (it.kind === "status") {
         lines.push(`### [${it.at}] roadmap status → ${it.status}`);
+      } else if (it.kind === "verify") {
+        lines.push(
+          `### [${it.at}] verify · pass ${it.passRate ?? "?"}% · ${it.result || ""}`
+        );
+        if (it.summary) lines.push(it.summary);
       } else {
         lines.push(`### [${it.at}] ${it.kind || "note"}`);
         if (it.detail) lines.push(it.detail);
@@ -3545,12 +3635,26 @@ export function formatRoadmapSummary(roadmap, { verbose = false } = {}) {
   }
   lines.push("", "**Steps (execution order)**");
   for (const st of steps) {
+    const vBadge =
+      st.verification?.result === "pass"
+        ? " ✓verified"
+        : st.verification?.result === "fail"
+          ? " ✗fail"
+          : st.verification?.result === "blocked"
+            ? " ⚠blocked"
+            : "";
     lines.push(
-      `${st.n}. [${st.status}] **${st.title}** — ${(st.files || []).map((f) => `\`${f}\``).join(", ")}`
+      `${st.n}. [${st.status}] **${st.title}**${vBadge} — ${(st.files || []).map((f) => `\`${f}\``).join(", ")}`
     );
     if (verbose) {
       for (const a of st.acceptance || []) {
         lines.push(`   - [ ] ${a}`);
+      }
+      const checks = ensureStepChecks(st, roadmap);
+      if (checks.length) {
+        lines.push(
+          `   - checks: ${checks.map((c) => c.kind).join(", ")} (${checks.length})`
+        );
       }
       if (st.expansions?.length) {
         lines.push(`   - _${st.expansions.length} expansion(s)_`);
@@ -3559,7 +3663,7 @@ export function formatRoadmapSummary(roadmap, { verbose = false } = {}) {
   }
   lines.push(
     "",
-    `_Iterate: \`/roadmap expand step N\` · status: \`/roadmap step N complete\` · \`/roadmap list\`_`
+    `_Verify: \`/roadmap verify\` · iterate: \`/roadmap expand step N\` · complete only after verify · \`/roadmap list\`_`
   );
   return lines.join("\n");
 }
@@ -3602,16 +3706,673 @@ export function roadmapHelpText() {
     "- `/roadmap` + paste SCROLL markdown — parse structured plan",
     "- `/roadmap list` — list saved roadmaps",
     "- `/roadmap show [slug]` — show plan",
+    "- `/roadmap verify [slug]` — run executable acceptance checks (not AI self-report)",
     "- `/roadmap expand step N [notes]` — deepen step (append-only)",
-    "- `/roadmap step N complete|pending|in-progress|blocked`",
+    "- `/roadmap step N complete|pending|in-progress|blocked` — **complete requires verify pass**",
     "- `/roadmap status [slug] in-progress|complete|blocked|pending`",
     "- `/roadmap open` — open Roadmap panel",
     "",
+    "**Executable checks:** `file_exists` · `source_match` · `lint` · `vault_entry`",
+    "**Gate:** steps cannot flip to complete without a passing `/roadmap verify`.",
     "**File targets:** `js/app.js`, `js/data.js`, `js/intelligence.js`, `index.html`, `css/styles.css`",
     "**Disk:** `GRIMOIRE-FocusIntelligence/grimoire-local/roadmaps/[slug].md`",
+    "**CLI/hooks:** `node tools/roadmap-verify.mjs` · `tools/githooks/pre-commit`",
     "",
     "_Does not modify vault covenant, spell system, bus routing, or path gate unless the plan explicitly requires it._",
   ].join("\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Roadmap Verification Layer — executable checks (not AI self-report)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Supported check kinds */
+export const ROADMAP_CHECK_KINDS = Object.freeze([
+  "file_exists",
+  "source_match",
+  "lint",
+  "vault_entry",
+]);
+
+export function makeRoadmapCheck(partial = {}) {
+  const kind = ROADMAP_CHECK_KINDS.includes(partial.kind)
+    ? partial.kind
+    : "file_exists";
+  return {
+    id:
+      partial.id ||
+      `chk-${kind}-${Math.random().toString(36).slice(2, 8)}`,
+    kind,
+    path: partial.path || "",
+    pattern: partial.pattern || "",
+    flags: partial.flags || "",
+    vaultPath: partial.vaultPath || "",
+    label:
+      partial.label ||
+      defaultCheckLabel(kind, partial.path || partial.vaultPath, partial.pattern),
+    result: partial.result || null, // pass | fail | blocked | null
+    evidence: partial.evidence || "",
+  };
+}
+
+function defaultCheckLabel(kind, path, pattern) {
+  if (kind === "file_exists") return `File exists: ${path || "?"}`;
+  if (kind === "source_match")
+    return `Source match: ${path || "?"} /${pattern || "..."}/`;
+  if (kind === "lint") return `Lint: ${path || "?"}`;
+  if (kind === "vault_entry") return `Vault entry: ${path || "?"}`;
+  return kind;
+}
+
+/**
+ * Parse one acceptance / check line into zero or more executable checks.
+ * Structured forms:
+ *   file_exists: js/app.js
+ *   file: js/app.js
+ *   source_match: js/data.js /export function foo/
+ *   match: js/app.js /handleRoadmap/
+ *   lint: js/app.js
+ *   vault_entry: grimoire-local/roadmaps/slug.md
+ *   vault: grimoire-local/roadmaps/slug.md
+ */
+export function parseAcceptanceCheckLine(line, step = {}) {
+  const raw = String(line || "").trim().replace(/^[-*\[\] xX]+\s*/, "");
+  if (!raw) return [];
+  const files = Array.isArray(step.files) ? step.files : [];
+  const primary = files[0] || "js/app.js";
+
+  let m = raw.match(
+    /^(?:file_exists|file)\s*:\s*[`']?([^\s`']+)[`']?\s*$/i
+  );
+  if (m) return [makeRoadmapCheck({ kind: "file_exists", path: m[1] })];
+
+  m = raw.match(
+    /^(?:source_match|match|regex)\s*:\s*[`']?([^\s`']+)[`']?\s+\/(.+)\/([a-z]*)\s*$/i
+  );
+  if (m) {
+    return [
+      makeRoadmapCheck({
+        kind: "source_match",
+        path: m[1],
+        pattern: m[2],
+        flags: m[3] || "",
+      }),
+    ];
+  }
+
+  m = raw.match(/^lint\s*:\s*[`']?([^\s`']+)[`']?\s*$/i);
+  if (m) return [makeRoadmapCheck({ kind: "lint", path: m[1] })];
+
+  m = raw.match(
+    /^(?:vault_entry|vault)\s*:\s*[`']?([^\s`']+)[`']?\s*$/i
+  );
+  if (m) {
+    return [
+      makeRoadmapCheck({
+        kind: "vault_entry",
+        path: m[1],
+        vaultPath: m[1],
+      }),
+    ];
+  }
+
+  // Free-text heuristics → weak but executable probes
+  const out = [];
+  // Backtick path references
+  for (const hit of raw.matchAll(/`((?:js|css)\/[\w./-]+\.(?:js|css|html)|index\.html)`/gi)) {
+    out.push(makeRoadmapCheck({ kind: "file_exists", path: hit[1] }));
+  }
+  // Symbol / export mentions
+  for (const hit of raw.matchAll(
+    /(?:export(?:ed)?|function|const|`|\/)([A-Za-z_$][\w$]{3,})(?:`|\/)?/g
+  )) {
+    const sym = hit[1];
+    if (
+      /^(function|const|export|status|pending|complete|blocked|files|step|phase)$/i.test(
+        sym
+      )
+    ) {
+      continue;
+    }
+    out.push(
+      makeRoadmapCheck({
+        kind: "source_match",
+        path: primary,
+        pattern: sym.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        label: `Symbol present: ${sym} in ${primary}`,
+      })
+    );
+  }
+  // Vault path phrases
+  if (/grimoire-local\/roadmaps/i.test(raw) || /vault/i.test(raw)) {
+    out.push(
+      makeRoadmapCheck({
+        kind: "vault_entry",
+        path: "grimoire-local/roadmaps",
+        vaultPath: "grimoire-local/roadmaps",
+        label: "Vault roadmaps directory present",
+      })
+    );
+  }
+  // Schema / status set language → match roadmap status helpers in data.js
+  if (/status set|pending\s*\|\s*in-progress|canonical set/i.test(raw)) {
+    out.push(
+      makeRoadmapCheck({
+        kind: "source_match",
+        path: "js/data.js",
+        pattern: "ROADMAP_STATUSES",
+        label: "ROADMAP_STATUSES exported in js/data.js",
+      })
+    );
+  }
+  if (/\/roadmap\s+help|documents all ops/i.test(raw)) {
+    out.push(
+      makeRoadmapCheck({
+        kind: "source_match",
+        path: "js/data.js",
+        pattern: "roadmapHelpText",
+        label: "roadmapHelpText present",
+      })
+    );
+  }
+  if (/expand step/i.test(raw)) {
+    out.push(
+      makeRoadmapCheck({
+        kind: "source_match",
+        path: "js/data.js",
+        pattern: "expandRoadmapStep",
+        label: "expandRoadmapStep present",
+      })
+    );
+  }
+  if (/panel opens|roadmap panel|\/roadmap open/i.test(raw)) {
+    out.push(
+      makeRoadmapCheck({
+        kind: "source_match",
+        path: "index.html",
+        pattern: "roadmap-panel",
+        label: "roadmap-panel in index.html",
+      })
+    );
+  }
+  if (/verify/i.test(raw) && /pass|acceptance|gate/i.test(raw)) {
+    out.push(
+      makeRoadmapCheck({
+        kind: "source_match",
+        path: "js/data.js",
+        pattern: "canMarkStepComplete",
+        label: "complete-gate canMarkStepComplete present",
+      })
+    );
+  }
+
+  return out;
+}
+
+/**
+ * Ensure step.checks is a non-empty list of executable checks.
+ * Merges structured acceptance lines + default file/lint probes.
+ */
+export function ensureStepChecks(step, roadmapOrMeta = {}) {
+  if (!step || typeof step !== "object") return [];
+  const existing = Array.isArray(step.checks)
+    ? step.checks.map((c) => makeRoadmapCheck(c))
+    : [];
+  const seen = new Set(
+    existing.map(
+      (c) => `${c.kind}|${c.path}|${c.pattern}|${c.vaultPath}`
+    )
+  );
+  const add = (c) => {
+    const key = `${c.kind}|${c.path}|${c.pattern}|${c.vaultPath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    existing.push(c);
+  };
+
+  for (const f of step.files || []) {
+    add(makeRoadmapCheck({ kind: "file_exists", path: f }));
+    if (/\.js$/i.test(f)) {
+      add(makeRoadmapCheck({ kind: "lint", path: f }));
+    }
+  }
+
+  for (const a of step.acceptance || []) {
+    for (const c of parseAcceptanceCheckLine(a, step)) add(c);
+  }
+
+  // Title/detail may name APIs
+  for (const c of parseAcceptanceCheckLine(step.title || "", step)) add(c);
+  for (const c of parseAcceptanceCheckLine(
+    String(step.detail || "").slice(0, 400),
+    step
+  )) {
+    add(c);
+  }
+
+  // Roadmap vault path for persistence steps
+  const slug = roadmapOrMeta?.slug;
+  if (
+    slug &&
+    /persist|vault|disk|grimoire-local|roadmap/i.test(
+      `${step.title || ""} ${step.detail || ""}`
+    )
+  ) {
+    add(
+      makeRoadmapCheck({
+        kind: "vault_entry",
+        path: `grimoire-local/roadmaps/${slug}.md`,
+        vaultPath: `grimoire-local/roadmaps/${slug}.md`,
+        label: `Vault roadmap file: ${slug}.md`,
+      })
+    );
+  }
+
+  // Always at least one check
+  if (!existing.length) {
+    add(
+      makeRoadmapCheck({
+        kind: "file_exists",
+        path: "js/app.js",
+        label: "Baseline: js/app.js exists",
+      })
+    );
+  }
+
+  step.checks = existing;
+  if (typeof step.verified !== "boolean") step.verified = false;
+  if (step.verification === undefined) step.verification = null;
+  return existing;
+}
+
+/**
+ * Attach/refresh executable checks on every step of a roadmap.
+ */
+export function ensureRoadmapChecks(roadmap) {
+  if (!roadmap) return roadmap;
+  for (const ph of roadmap.phases || []) {
+    for (const st of ph.steps || []) {
+      ensureStepChecks(st, roadmap);
+    }
+  }
+  return roadmap;
+}
+
+/**
+ * Apply a verification run result onto a step (mutates).
+ * result: pass | fail | blocked
+ */
+export function applyStepVerification(step, checkResults, { at } = {}) {
+  if (!step) return null;
+  const checks = Array.isArray(checkResults) ? checkResults : [];
+  const ts = at || new Date().toISOString();
+  let result = "pass";
+  if (checks.some((c) => c.result === "blocked")) result = "blocked";
+  else if (checks.some((c) => c.result === "fail")) result = "fail";
+  else if (!checks.length) result = "blocked";
+  else if (!checks.every((c) => c.result === "pass")) result = "fail";
+
+  step.checks = checks.map((c) => makeRoadmapCheck(c));
+  step.verified = result === "pass";
+  step.verification = {
+    result,
+    at: ts,
+    checks: step.checks.map((c) => ({
+      id: c.id,
+      kind: c.kind,
+      path: c.path,
+      pattern: c.pattern,
+      result: c.result,
+      evidence: c.evidence,
+      label: c.label,
+    })),
+  };
+
+  // If previously complete but verification failed → demote
+  if (step.status === "complete" && result !== "pass") {
+    step.status = result === "blocked" ? "blocked" : "in-progress";
+  }
+  // Do not auto-complete on pass — human gate still required
+  if (result === "pass" && step.status === "pending") {
+    step.status = "in-progress";
+  }
+  if (result === "blocked" && step.status !== "complete") {
+    step.status = "blocked";
+  }
+  return step;
+}
+
+/**
+ * Build aggregate verification report for a roadmap after checks ran.
+ */
+export function buildVerificationReport(roadmap, stepResults = []) {
+  const at = new Date().toISOString();
+  const steps = stepResults.length
+    ? stepResults
+    : flattenRoadmapSteps(roadmap).map((st) => ({
+        n: st.n,
+        title: st.title,
+        status: st.status,
+        result: st.verification?.result || "blocked",
+        checks: st.verification?.checks || st.checks || [],
+      }));
+
+  const eligible = steps.filter((s) => s.result !== "skip");
+  const passed = eligible.filter((s) => s.result === "pass").length;
+  const failed = eligible.filter((s) => s.result === "fail").length;
+  const blocked = eligible.filter((s) => s.result === "blocked").length;
+  const total = eligible.length || 1;
+  const passRate = Math.round((passed / total) * 1000) / 10;
+
+  const blockers = [];
+  for (const s of steps) {
+    if (s.result === "pass") continue;
+    for (const c of s.checks || []) {
+      if (c.result === "fail" || c.result === "blocked") {
+        blockers.push({
+          step: s.n,
+          title: s.title,
+          kind: c.kind,
+          path: c.path || c.vaultPath || "",
+          evidence: c.evidence || c.label || "",
+          result: c.result,
+        });
+      }
+    }
+    if (!(s.checks || []).length && s.result !== "pass") {
+      blockers.push({
+        step: s.n,
+        title: s.title,
+        kind: "none",
+        path: "",
+        evidence: "No executable checks defined",
+        result: "blocked",
+      });
+    }
+  }
+
+  const nextActions = [];
+  if (failed || blocked) {
+    nextActions.push("Fix failing checks (see blockers), then re-run `/roadmap verify`.");
+  }
+  const readyToComplete = flattenRoadmapSteps(roadmap).filter(
+    (st) => canMarkStepComplete(st) && st.status !== "complete"
+  );
+  if (readyToComplete.length) {
+    nextActions.push(
+      `Mark verified steps complete: ${readyToComplete
+        .map((s) => `\`/roadmap step ${s.n} complete\``)
+        .join(", ")}`
+    );
+  }
+  if (!failed && !blocked && readyToComplete.length === 0) {
+    const incomplete = flattenRoadmapSteps(roadmap).filter(
+      (s) => s.status !== "complete"
+    );
+    if (incomplete.length) {
+      nextActions.push(
+        "All current checks passed — mark remaining verified steps complete when ready."
+      );
+    } else {
+      nextActions.push("All steps complete. Roadmap can be closed.");
+    }
+  }
+  if (!nextActions.length) {
+    nextActions.push("Re-run verify after code changes. Complete is gated on pass.");
+  }
+
+  const overall =
+    blocked && !passed && !failed
+      ? "blocked"
+      : failed || blocked
+        ? "fail"
+        : "pass";
+
+  return {
+    slug: roadmap?.slug || "",
+    title: roadmap?.title || "",
+    at,
+    result: overall,
+    passRate,
+    passed,
+    failed,
+    blocked,
+    total: eligible.length,
+    steps,
+    blockers,
+    nextActions,
+  };
+}
+
+/**
+ * Format verification report for chat / vault.
+ */
+export function formatVerificationReport(report) {
+  if (!report) return "_No verification report._";
+  const lines = [
+    `### Verification · \`${report.slug}\``,
+    `Result: **${report.result}** · pass rate **${report.passRate}%** (${report.passed}/${report.total}) · _${report.at}_`,
+    "",
+    "**Steps**",
+  ];
+  for (const s of report.steps || []) {
+    const icon =
+      s.result === "pass" ? "✓" : s.result === "fail" ? "✗" : s.result === "skip" ? "·" : "⚠";
+    lines.push(`${icon} **Step ${s.n}** [${s.result}] ${s.title || ""}`);
+    for (const c of s.checks || []) {
+      const mark =
+        c.result === "pass" ? "pass" : c.result === "fail" ? "FAIL" : "blocked";
+      lines.push(
+        `   - \`${c.kind}\` ${c.path || c.vaultPath || ""} → **${mark}**${
+          c.evidence ? ` — ${c.evidence}` : ""
+        }`
+      );
+    }
+  }
+  if (report.blockers?.length) {
+    lines.push("", "**Blockers**");
+    for (const b of report.blockers.slice(0, 20)) {
+      lines.push(
+        `- Step ${b.step}: \`${b.kind}\` ${b.path} — ${b.evidence || b.result}`
+      );
+    }
+  }
+  lines.push("", "**Next actions**");
+  for (const a of report.nextActions || []) {
+    lines.push(`- ${a}`);
+  }
+  lines.push(
+    "",
+    "_Gate: only steps with verification **pass** can be marked complete. Not AI self-report._"
+  );
+  return lines.join("\n");
+}
+
+/**
+ * Lightweight lint for browser (CLI uses real `node --check`).
+ * Strips strings/comments/templates/regex before brace balance to avoid
+ * false fails on /regex{}/ and `${templates}`.
+ * Returns { ok, evidence }.
+ */
+export function structuralLintSource(source, path = "file") {
+  const text = String(source ?? "");
+  if (!text.length) {
+    return { ok: false, evidence: `${path}: empty file` };
+  }
+
+  // Strip noise, then balance braces only
+  let stripped = "";
+  let i = 0;
+  const n = text.length;
+
+  while (i < n) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    // line comment
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < n && text[i] !== "\n") i++;
+      continue;
+    }
+    // block comment
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    // strings
+    if (ch === '"' || ch === "'") {
+      const q = ch;
+      i++;
+      while (i < n) {
+        if (text[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (text[i] === q) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      stripped += '""';
+      continue;
+    }
+    // template literals (drop ${} bodies recursively-ish by scanning)
+    if (ch === "`") {
+      i++;
+      while (i < n) {
+        if (text[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (text[i] === "`") {
+          i++;
+          break;
+        }
+        if (text[i] === "$" && text[i + 1] === "{") {
+          // skip nested braces inside ${}
+          i += 2;
+          let depth = 1;
+          while (i < n && depth > 0) {
+            if (text[i] === "{") depth++;
+            else if (text[i] === "}") depth--;
+            else if (text[i] === "`") {
+              // nested template — skip crudely
+              i++;
+              while (i < n && text[i] !== "`") {
+                if (text[i] === "\\") i++;
+                i++;
+              }
+            } else if (text[i] === '"' || text[i] === "'") {
+              const q = text[i++];
+              while (i < n && text[i] !== q) {
+                if (text[i] === "\\") i++;
+                i++;
+              }
+            }
+            i++;
+          }
+          continue;
+        }
+        i++;
+      }
+      stripped += "``";
+      continue;
+    }
+    // regex literal (heuristic: / after non-identifier)
+    if (ch === "/" && next !== "/" && next !== "*") {
+      const prev = stripped.trimEnd().slice(-1);
+      if (!prev || /[([{\s,;=!:?&|+\-*%^~<>]/.test(prev) || prev === "") {
+        i++;
+        while (i < n) {
+          if (text[i] === "\\") {
+            i += 2;
+            continue;
+          }
+          if (text[i] === "[") {
+            i++;
+            while (i < n && text[i] !== "]") {
+              if (text[i] === "\\") i++;
+              i++;
+            }
+            i++;
+            continue;
+          }
+          if (text[i] === "/") {
+            i++;
+            while (i < n && /[a-z]/i.test(text[i])) i++;
+            break;
+          }
+          if (text[i] === "\n") break;
+          i++;
+        }
+        stripped += "/~/";
+        continue;
+      }
+    }
+
+    stripped += ch;
+    i++;
+  }
+
+  // Forbidden patterns only on stripped code (ignore comments / string docs)
+  if (/\bnull\s*\.\s*value\b/.test(stripped)) {
+    return {
+      ok: false,
+      evidence: `${path}: forbidden null.value access in code`,
+    };
+  }
+
+  const stack = [];
+  for (let j = 0; j < stripped.length; j++) {
+    const ch = stripped[j];
+    if (ch === "{" || ch === "(" || ch === "[") stack.push(ch);
+    if (ch === "}" || ch === ")" || ch === "]") {
+      const open = stack.pop();
+      const pair = { "}": "{", ")": "(", "]": "[" }[ch];
+      if (open !== pair) {
+        return {
+          ok: false,
+          evidence: `${path}: unbalanced ${ch} (browser lint)`,
+        };
+      }
+    }
+  }
+  if (stack.length) {
+    return {
+      ok: false,
+      evidence: `${path}: unclosed ${stack.join(" ")} (browser lint)`,
+    };
+  }
+  return {
+    ok: true,
+    evidence: `${path}: browser lint ok (${text.length} bytes; CLI: node --check)`,
+  };
+}
+
+/**
+ * Pure helper: evaluate a source_match check against text.
+ */
+export function evalSourceMatch(source, pattern, flags = "") {
+  try {
+    const re = new RegExp(pattern, flags || "");
+    const ok = re.test(String(source ?? ""));
+    return {
+      ok,
+      evidence: ok
+        ? `matched /${pattern}/${flags || ""}`
+        : `no match for /${pattern}/${flags || ""}`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      evidence: `invalid regex: ${err?.message || err}`,
+      blocked: true,
+    };
+  }
 }
 
 export const ALIGNMENT_DIRECTIVE_TEXT =

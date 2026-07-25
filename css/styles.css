@@ -1601,6 +1601,68 @@ body.universe-view-active {
   color: var(--text-dim);
   line-height: 1.4;
 }
+.roadmap-verify-meta {
+  margin: 0 0 0.65rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.roadmap-verify-meta code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+}
+.roadmap-checks {
+  margin: 0.25rem 0 0.4rem;
+  padding-left: 1.1rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  list-style: disc;
+}
+.roadmap-checks li {
+  margin-bottom: 0.15rem;
+}
+.roadmap-checks .check-pass {
+  color: #6ee7b7;
+}
+.roadmap-checks .check-fail {
+  color: #fca5a5;
+}
+.roadmap-checks .check-blocked {
+  color: #fcd34d;
+}
+.roadmap-checks .check-pending {
+  color: var(--text-dim);
+}
+.roadmap-checks .check-pat {
+  opacity: 0.75;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.65rem;
+}
+.roadmap-checks .check-ev {
+  opacity: 0.85;
+}
+.roadmap-status-chip.status-verify-pass {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.12);
+  color: #6ee7b7;
+}
+.roadmap-status-chip.status-verify-fail {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+}
+.roadmap-status-chip.status-verify-blocked {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fcd34d;
+}
+.roadmap-status-chip.status-verify-none {
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #94a3b8;
+}
+.roadmap-step-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 @media (max-width: 720px) {
   .roadmap-layout {
     grid-template-columns: 1fr;

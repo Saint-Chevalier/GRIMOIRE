@@ -1,0 +1,41 @@
+#!/bin/sh
+# Grimoire GBG pre-commit — real checks, not AI self-report.
+# Install (once):
+#   git config core.hooksPath tools/githooks
+# Or copy to .git/hooks/pre-commit and chmod +x.
+#
+# Runs: node --check on staged JS + tools/roadmap-verify.mjs --gbg --no-lint
+# (lint already covered by node --check on staged files)
+
+set -e
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$ROOT"
+
+STAGED_JS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(js|mjs)$' || true)
+
+if [ -n "$STAGED_JS" ]; then
+  echo "[gbg] node --check staged JS…"
+  echo "$STAGED_JS" | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    node --check "$f" || {
+      echo "[gbg] FAIL: node --check $f"
+      exit 1
+    }
+  done
+fi
+
+if [ -f "tools/roadmap-verify.mjs" ]; then
+  echo "[gbg] roadmap-verify --gbg…"
+  # Vault optional: ROADMAP_VAULT=/path/to/GRIMOIRE-FocusIntelligence
+  if [ -n "$ROADMAP_VAULT" ]; then
+    node tools/roadmap-verify.mjs --gbg --vault "$ROADMAP_VAULT" || exit 1
+  else
+    # Without vault, skip vault_entry blocked noise: only files + matches + lint defaults
+    node tools/roadmap-verify.mjs --gbg --no-lint \
+      --match "js/data.js:canMarkStepComplete" \
+      --match "js/app.js:runRoadmapVerification" || exit 1
+  fi
+fi
+
+echo "[gbg] pre-commit checks passed"
+exit 0

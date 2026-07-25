@@ -82,14 +82,23 @@ import {
   uniqueRoadmapSlug,
   roadmapHelpText,
   flattenRoadmapSteps,
+  ensureRoadmapChecks,
+  ensureStepChecks,
+  applyStepVerification,
+  buildVerificationReport,
+  formatVerificationReport,
+  canMarkStepComplete,
+  structuralLintSource,
+  evalSourceMatch,
+  makeRoadmapCheck,
   ROADMAP_STATUSES,
-} from "./data.js?v=spell-face-compact-1";
+} from "./data.js?v=roadmap-verify-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=spell-face-compact-1";
+} from "./stars.js?v=roadmap-verify-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -97,7 +106,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=spell-face-compact-1";
+} from "./universe.js?v=roadmap-verify-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -132,6 +141,8 @@ import {
   writeRoadmapFile,
   appendRoadmapIteration,
   listRoadmapFiles,
+  checkVaultEntry,
+  writeVerificationReportFile,
   saveEntityImage,
   classifyCell2Kind,
   entityIntelPath,
@@ -148,12 +159,12 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=spell-face-compact-1";
+} from "./intelligence.js?v=roadmap-verify-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=spell-face-compact-1";
+} from "./health.js?v=roadmap-verify-1";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -8425,6 +8436,7 @@ function activeRoadmap() {
 
 async function persistRoadmapToVault(roadmap) {
   if (!roadmap) return { ok: false };
+  ensureRoadmapChecks(roadmap);
   const md = formatRoadmapMarkdown(roadmap);
   const focusId = activeConvo()?.id || null;
   try {
@@ -8436,6 +8448,188 @@ async function persistRoadmapToVault(roadmap) {
     console.warn("persistRoadmapToVault", err);
     return { ok: false, error: String(err) };
   }
+}
+
+/** Cache of fetched app sources during a verify pass */
+const verifySourceCache = new Map();
+
+async function fetchAppSource(path) {
+  const p = String(path || "").replace(/^\.\//, "").replace(/^\/+/, "");
+  if (!p) return { ok: false, status: 0, text: "", path: p };
+  if (verifySourceCache.has(p)) return verifySourceCache.get(p);
+  try {
+    const url = new URL(p, window.location.href).toString();
+    const res = await fetch(url, { cache: "no-store" });
+    const text = res.ok ? await res.text() : "";
+    const out = { ok: res.ok, status: res.status, text, path: p };
+    verifySourceCache.set(p, out);
+    return out;
+  } catch (err) {
+    const out = {
+      ok: false,
+      status: 0,
+      text: "",
+      path: p,
+      error: String(err?.message || err),
+    };
+    verifySourceCache.set(p, out);
+    return out;
+  }
+}
+
+/**
+ * Run one executable check against the live app / vault.
+ * Kinds: file_exists | source_match | lint | vault_entry
+ */
+async function runRoadmapCheck(check, { focusId = null } = {}) {
+  const c = makeRoadmapCheck(check);
+  try {
+    if (c.kind === "file_exists") {
+      const src = await fetchAppSource(c.path);
+      if (src.ok) {
+        c.result = "pass";
+        c.evidence = `${c.path} HTTP ${src.status} (${src.text.length} bytes)`;
+      } else {
+        c.result = "fail";
+        c.evidence = src.error
+          ? `${c.path} fetch error: ${src.error}`
+          : `${c.path} missing (HTTP ${src.status || 0})`;
+      }
+      return c;
+    }
+
+    if (c.kind === "source_match") {
+      if (!c.pattern) {
+        c.result = "blocked";
+        c.evidence = "source_match: no pattern";
+        return c;
+      }
+      const src = await fetchAppSource(c.path);
+      if (!src.ok) {
+        c.result = "blocked";
+        c.evidence = `cannot read ${c.path} (HTTP ${src.status || 0})`;
+        return c;
+      }
+      const ev = evalSourceMatch(src.text, c.pattern, c.flags);
+      if (ev.blocked) {
+        c.result = "blocked";
+        c.evidence = ev.evidence;
+      } else {
+        c.result = ev.ok ? "pass" : "fail";
+        c.evidence = `${c.path}: ${ev.evidence}`;
+      }
+      return c;
+    }
+
+    if (c.kind === "lint") {
+      const src = await fetchAppSource(c.path);
+      if (!src.ok) {
+        c.result = "blocked";
+        c.evidence = `lint blocked — cannot read ${c.path}`;
+        return c;
+      }
+      // Prefer structural lint in-browser; CLI tools/roadmap-verify.mjs runs node --check
+      const lint = structuralLintSource(src.text, c.path);
+      c.result = lint.ok ? "pass" : "fail";
+      c.evidence = lint.evidence;
+      return c;
+    }
+
+    if (c.kind === "vault_entry") {
+      const vaultRes = await checkVaultEntry(c.vaultPath || c.path, {
+        focusId,
+        path: c.path,
+      });
+      c.result = vaultRes.result || "blocked";
+      c.evidence = vaultRes.evidence || "";
+      return c;
+    }
+
+    c.result = "blocked";
+    c.evidence = `unknown check kind: ${c.kind}`;
+    return c;
+  } catch (err) {
+    c.result = "blocked";
+    c.evidence = `check error: ${err?.message || err}`;
+    return c;
+  }
+}
+
+/**
+ * Verify pending/in-progress steps (and re-check complete) for a roadmap.
+ * Writes evidence onto each step; does NOT auto-mark complete.
+ */
+async function runRoadmapVerification(roadmap, { focusId = null } = {}) {
+  if (!roadmap) return null;
+  ensureRoadmapChecks(roadmap);
+  verifySourceCache.clear();
+  const focus = focusId || activeConvo()?.id || null;
+  const all = flattenRoadmapSteps(roadmap);
+  const stepResults = [];
+
+  for (const st of all) {
+    const status = String(st.status || "pending");
+    // Run pending + in-progress + blocked; also re-verify complete (demote on fail)
+    const shouldRun =
+      status === "pending" ||
+      status === "in-progress" ||
+      status === "blocked" ||
+      status === "complete";
+    if (!shouldRun) {
+      stepResults.push({
+        n: st.n,
+        title: st.title,
+        status: st.status,
+        result: "skip",
+        checks: [],
+      });
+      continue;
+    }
+
+    const checks = ensureStepChecks(st, roadmap);
+    const ran = [];
+    for (const chk of checks) {
+      ran.push(await runRoadmapCheck(chk, { focusId: focus }));
+    }
+    applyStepVerification(st, ran);
+    stepResults.push({
+      n: st.n,
+      title: st.title,
+      status: st.status,
+      result: st.verification?.result || "blocked",
+      checks: ran,
+    });
+  }
+
+  // Roll roadmap status from steps (without forcing complete)
+  const live = flattenRoadmapSteps(roadmap);
+  if (live.some((s) => s.status === "blocked")) {
+    if (roadmap.status !== "complete") roadmap.status = "blocked";
+  } else if (live.every((s) => s.status === "complete")) {
+    roadmap.status = "complete";
+  } else if (live.some((s) => s.status === "in-progress" || s.verified)) {
+    if (roadmap.status === "pending" || roadmap.status === "blocked") {
+      roadmap.status = "in-progress";
+    }
+  }
+
+  const report = buildVerificationReport(roadmap, stepResults);
+  roadmap.lastVerification = {
+    at: report.at,
+    result: report.result,
+    passRate: report.passRate,
+  };
+  if (!Array.isArray(roadmap.iterations)) roadmap.iterations = [];
+  roadmap.iterations.push({
+    at: report.at,
+    kind: "verify",
+    result: report.result,
+    passRate: report.passRate,
+    summary: `${report.passed}/${report.total} steps pass · ${report.blockers.length} blocker(s)`,
+  });
+  roadmap.updatedAt = report.at;
+
+  return report;
 }
 
 function upsertRoadmap(roadmap) {
@@ -8588,17 +8782,74 @@ async function handleRoadmapCommand(convo, cmd, rawText) {
     return;
   }
 
+  if (cmd.op === "verify") {
+    const rm =
+      (cmd.slug && findRoadmapBySlug(state, cmd.slug)) || activeRoadmap();
+    if (!rm) {
+      reply(
+        "No roadmap to verify. Create one with `/roadmap <description>` or pass a slug."
+      );
+      return;
+    }
+    state.activeRoadmapSlug = rm.slug;
+    toast(`Verifying ${rm.slug}…`, "");
+    reply(`Running executable checks on **${rm.title}** (\`${rm.slug}\`)…`);
+    let report;
+    try {
+      report = await runRoadmapVerification(rm, { focusId: convo?.id });
+    } catch (err) {
+      reply(`**Verify failed to run:** ${err?.message || err}`);
+      return;
+    }
+    upsertRoadmap(rm);
+    await persistRoadmapToVault(rm);
+    try {
+      await writeVerificationReportFile(
+        rm.slug,
+        formatVerificationReport(report),
+        { focusId: convo?.id }
+      );
+    } catch (err) {
+      console.warn("verify report write", err);
+    }
+    await appendRoadmapIteration(
+      rm.slug,
+      `verify → ${report.result} (${report.passRate}%)`,
+      { focusId: convo?.id }
+    );
+    reply(formatVerificationReport(report));
+    toast(
+      report.result === "pass"
+        ? `Verify pass ${report.passRate}%`
+        : `Verify ${report.result} ${report.passRate}%`,
+      report.result === "pass" ? "success" : ""
+    );
+    renderRoadmapPanel();
+    return;
+  }
+
   if (cmd.op === "step_status") {
     const rm = activeRoadmap();
     if (!rm) {
       reply("No active roadmap.");
       return;
     }
-    const updated = setRoadmapStepStatus(rm, cmd.step, cmd.status);
-    if (!updated) {
+    const result = setRoadmapStepStatus(rm, cmd.step, cmd.status);
+    if (!result) {
       reply(`Step **${cmd.step}** not found.`);
       return;
     }
+    if (result.ok === false) {
+      reply(
+        `**Blocked — verification required**\n\n${result.message || result.reason}\n\n` +
+          (canMarkStepComplete(result.step)
+            ? ""
+            : `_Last verification: **${result.step?.verification?.result || "none"}**. Run \`/roadmap verify\`._`)
+      );
+      toast("Complete requires verify pass", "");
+      return;
+    }
+    const updated = result.roadmap || rm;
     upsertRoadmap(updated);
     await appendRoadmapIteration(
       updated.slug,
@@ -8621,6 +8872,25 @@ async function handleRoadmapCommand(convo, cmd, rawText) {
       reply("No roadmap found for status update.");
       return;
     }
+    // Whole-roadmap complete also requires every step verified
+    if (normalizeRoadmapStatusLocal(cmd.status) === "complete") {
+      ensureRoadmapChecks(rm);
+      const unverifiedComplete = flattenRoadmapSteps(rm).filter(
+        (s) => s.status !== "complete" && !canMarkStepComplete(s)
+      );
+      if (unverifiedComplete.length) {
+        reply(
+          `**Roadmap complete blocked** — ${unverifiedComplete.length} step(s) not verified.\n` +
+            `Run \`/roadmap verify ${rm.slug}\`, then mark each step complete.\n` +
+            unverifiedComplete
+              .slice(0, 8)
+              .map((s) => `- Step ${s.n}: ${s.title}`)
+              .join("\n")
+        );
+        toast("Verify steps before completing roadmap", "");
+        return;
+      }
+    }
     setRoadmapStatus(rm, cmd.status);
     upsertRoadmap(rm);
     await appendRoadmapIteration(rm.slug, `roadmap status → ${cmd.status}`, {
@@ -8633,6 +8903,12 @@ async function handleRoadmapCommand(convo, cmd, rawText) {
   }
 
   reply(roadmapHelpText());
+}
+
+function normalizeRoadmapStatusLocal(s) {
+  const v = String(s || "").toLowerCase().replace(/_/g, "-");
+  if (v === "done" || v === "completed") return "complete";
+  return v;
 }
 
 function openRoadmapPanel() {
@@ -8722,6 +8998,44 @@ function renderRoadmapPanel() {
               const acc = (st.acceptance || [])
                 .map((a) => `<li>${escapeHtml(a)}</li>`)
                 .join("");
+              const checks = ensureStepChecks(st, rm);
+              const checksHtml = checks.length
+                ? `<ul class="roadmap-checks">${checks
+                    .map((c) => {
+                      const r = c.result || st.verification?.checks?.find(
+                        (x) => x.id === c.id
+                      )?.result;
+                      const mark =
+                        r === "pass"
+                          ? "pass"
+                          : r === "fail"
+                            ? "fail"
+                            : r === "blocked"
+                              ? "blocked"
+                              : "pending";
+                      return `<li class="check-${mark}"><code>${escapeHtml(
+                        c.kind
+                      )}</code> ${escapeHtml(c.path || c.vaultPath || "")}${
+                        c.pattern
+                          ? ` <span class="check-pat">/${escapeHtml(c.pattern)}/</span>`
+                          : ""
+                      }${
+                        c.evidence
+                          ? ` — <span class="check-ev">${escapeHtml(
+                              String(c.evidence).slice(0, 120)
+                            )}</span>`
+                          : ""
+                      }</li>`;
+                    })
+                    .join("")}</ul>`
+                : "";
+              const vResult = st.verification?.result;
+              const vChip = vResult
+                ? `<span class="roadmap-status-chip status-verify-${escapeAttr(
+                    vResult
+                  )}" title="Verification">${escapeHtml(vResult)}</span>`
+                : `<span class="roadmap-status-chip status-verify-none" title="Not verified">unverified</span>`;
+              const canComplete = canMarkStepComplete(st);
               const exp = (st.expansions || [])
                 .map(
                   (e) =>
@@ -8732,15 +9046,19 @@ function renderRoadmapPanel() {
                 <div class="roadmap-step-head">
                   <strong>Step ${st.n}: ${escapeHtml(st.title)}</strong>
                   <span class="roadmap-status-chip status-${escapeAttr(st.status)}">${escapeHtml(st.status)}</span>
+                  ${vChip}
                 </div>
                 <div class="roadmap-step-files">${files}</div>
                 <p class="roadmap-step-detail">${escapeHtml(String(st.detail || "").slice(0, 400))}</p>
                 <ul class="roadmap-acceptance">${acc}</ul>
+                ${checksHtml}
                 ${exp ? `<ul class="roadmap-expansions">${exp}</ul>` : ""}
                 <div class="roadmap-step-actions">
                   <button type="button" class="btn-secondary btn-xs" data-action="expand" data-step="${st.n}">Expand</button>
                   <button type="button" class="btn-secondary btn-xs" data-action="status" data-step="${st.n}" data-status="in-progress">In progress</button>
-                  <button type="button" class="btn-secondary btn-xs" data-action="status" data-step="${st.n}" data-status="complete">Complete</button>
+                  <button type="button" class="btn-secondary btn-xs" data-action="status" data-step="${st.n}" data-status="complete" ${
+                    canComplete ? "" : "title=\"Requires /roadmap verify pass\" disabled"
+                  }>Complete</button>
                   <button type="button" class="btn-secondary btn-xs" data-action="status" data-step="${st.n}" data-status="blocked">Blocked</button>
                 </div>
               </div>`;
@@ -8769,6 +9087,7 @@ function renderRoadmapPanel() {
             </p>
           </div>
           <div class="roadmap-detail-actions">
+            <button type="button" class="btn-primary btn-xs" id="btn-roadmap-verify" title="Run executable checks">Verify</button>
             <button type="button" class="btn-secondary btn-xs" id="btn-roadmap-copy-md" title="Copy markdown">Copy MD</button>
             <button type="button" class="btn-secondary btn-xs" id="btn-roadmap-set-progress">Mark in-progress</button>
           </div>
@@ -8777,6 +9096,15 @@ function renderRoadmapPanel() {
         <div class="roadmap-files-row">${(rm.fileTargets || [])
           .map((f) => `<code>${escapeHtml(f)}</code>`)
           .join(" ")}</div>
+        ${
+          rm.lastVerification
+            ? `<p class="roadmap-verify-meta">Last verify: <strong>${escapeHtml(
+                rm.lastVerification.result || "?"
+              )}</strong> · ${escapeHtml(
+                String(rm.lastVerification.passRate ?? "?")
+              )}% · ${escapeHtml(rm.lastVerification.at || "")}</p>`
+            : `<p class="roadmap-verify-meta">Not verified yet — run <code>/roadmap verify</code> before marking steps complete.</p>`
+        }
         ${phasesHtml}
       `;
 
@@ -8788,6 +9116,14 @@ function renderRoadmapPanel() {
         } catch {
           toast("Copy failed", "");
         }
+      });
+      detailEl.querySelector("#btn-roadmap-verify")?.addEventListener("click", () => {
+        const c = activeConvo();
+        void handleRoadmapCommand(
+          c,
+          { op: "verify", slug: rm.slug },
+          `/roadmap verify ${rm.slug}`
+        );
       });
       detailEl
         .querySelector("#btn-roadmap-set-progress")
