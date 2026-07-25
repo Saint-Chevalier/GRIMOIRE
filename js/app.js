@@ -92,13 +92,13 @@ import {
   evalSourceMatch,
   makeRoadmapCheck,
   ROADMAP_STATUSES,
-} from "./data.js?v=roadmap-verify-1";
+} from "./data.js?v=auto-writeback-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=roadmap-verify-1";
+} from "./stars.js?v=auto-writeback-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -106,7 +106,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=roadmap-verify-1";
+} from "./universe.js?v=auto-writeback-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -127,6 +127,9 @@ import {
   buildScrollList,
   appendCell2Intelligence,
   appendEntityIntelligence,
+  autoWriteFocusIntelligence,
+  setScrollListCurateProvider,
+  scheduleScrollListCurate,
   readCell2IntelligenceLog,
   readEntityIntelligence,
   ensureCell2IntelligenceFile,
@@ -159,12 +162,12 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=roadmap-verify-1";
+} from "./intelligence.js?v=auto-writeback-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=roadmap-verify-1";
+} from "./health.js?v=auto-writeback-1";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -297,6 +300,11 @@ ensureScrollFocus(state);
 ensureCell2CoreFocus(state);
 // Roadmap Engine — structured build plans (memory + vault)
 ensureRoadmapsState(state);
+// SCROLL List auto-curates whenever vault writes land
+setScrollListCurateProvider(() => ({
+  conversations: state.conversations,
+  spells: state.spells,
+}));
 // Focus org UI (search is ephemeral; folders + pin/tags persist via saveState)
 if (!Array.isArray(state.focusFolders) || !state.focusFolders.length) {
   state.focusFolders = structuredClone(DEFAULT_FOCUS_FOLDERS);
@@ -1118,7 +1126,7 @@ async function handleAwaitPasteReply(convo, pastedText) {
       ? String(spell.target).trim()
       : "user";
   try {
-    await appendEntityIntelligence(convo, {
+    const densen = await appendEntityIntelligence(convo, {
       body: [
         `**Spell reply sealed** · ${spellFaceTitle(spell)} · v${spell.iteration || 1}`,
         `Target: ${spell.target || convo.name}`,
@@ -1128,9 +1136,16 @@ async function handleAwaitPasteReply(convo, pastedText) {
       source: sourceName,
       category: isAlignmentSpell(spell) ? "identity" : "node_intel",
       certainty: "confirmed",
-      tags: ["spell-reply", "auto-cast", spell.kind || "spell"].filter(Boolean),
+      tags: ["spell-reply", "auto-cast", "auto-write", spell.kind || "spell"].filter(
+        Boolean
+      ),
+      focusId: convo.id,
+      refreshScroll: true,
     });
     invalidateContribCache(convo.id);
+    if (densen?.method === "filesystem" && densen?.ok !== false) {
+      toastVaultWritten(convo.name || "");
+    }
   } catch (err) {
     console.warn("[await-paste] vault densen failed", err);
   }
@@ -4435,12 +4450,13 @@ async function handleBusRoute(convo, cmd) {
     message ||
     `(bus ping from **${convo.name}** — no body; operator opened channel)`;
 
-  // Densen into target vault
-  await densenBusMessage(target || node, payload, {
+  // Densen into receiving focus vault (append-only intelligence.md)
+  const densen = await densenBusMessage(target || node, payload, {
     kind: "route",
     channel,
     from: convo.name || "user",
     source: "user",
+    focusId: target?.id || null,
   });
 
   // Cross-focus: densen target intel into current session when routing away
@@ -4448,6 +4464,23 @@ async function handleBusRoute(convo, cmd) {
   if (target && target.id !== convo.id) {
     const relay = await relayIntelBetweenFocuses(target, convo, payload);
     if (relay?.text) relayNote = `\n\n---\n${relay.text}`;
+    // Also append relay receipt onto the *receiving* focus vault
+    void queueAutoWriteBack(target, {
+      eventType: "BUS_ROUTE_RECEIVED",
+      body: [
+        `**Bus route received** from **${convo.name}** · \`${channel}\``,
+        ``,
+        payload.slice(0, 4000),
+        relay?.text ? `\n---\n${relay.text}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      source: convo.name || "user",
+      category: "relationship",
+      tags: ["bus", "route", "auto-write"],
+      refreshScrollImmediate: true,
+      silentToast: true,
+    });
   }
 
   // Switch active focus to target when it exists
@@ -4461,21 +4494,37 @@ async function handleBusRoute(convo, cmd) {
       ts: Date.now(),
       kind: "bus-route",
     });
+    const busAck = [
+      `**Cell2 Message Bus** delivered to **${target.name}** · \`${channel}\`.`,
+      `Intelligence densened → \`${node.intel_file_path || entityIntelPath(entityIdFromFocus(target))}\`.`,
+      `Craft a spell for this channel or keep talking — local vault only.`,
+    ].join("\n");
     target.messages.push({
       id: uid("msg"),
       role: "grimoire",
-      text: [
-        `**Cell2 Message Bus** delivered to **${target.name}** · \`${channel}\`.`,
-        `Intelligence densened → \`${node.intel_file_path || entityIntelPath(entityIdFromFocus(target))}\`.`,
-        `Craft a spell for this channel or keep talking — local vault only.`,
-      ].join("\n"),
+      text: busAck,
       ts: Date.now(),
       kind: "bus",
+    });
+    // GRIMOIRE bus ack → receiving focus vault (background)
+    void queueAutoWriteBack(target, {
+      eventType: "GRIMOIRE_REPLY",
+      body: busAck,
+      source: "Grimoire",
+      category: "node_intel",
+      tags: ["bus", "grimoire-reply", "auto-write"],
+      silentToast: true,
     });
     touchFocus(target);
   }
 
-  await updateScrollListIndex(state.conversations, state.spells);
+  // SCROLL List auto-curate after bus densen
+  scheduleScrollListCurate({ immediate: true });
+  try {
+    await updateScrollListIndex(state.conversations, state.spells);
+  } catch {
+    /* non-fatal */
+  }
 
   addBusReply(
     convo,
@@ -4485,11 +4534,20 @@ async function handleBusRoute(convo, cmd) {
       target
         ? `Switched active Focus to **${target.name}**. Message densened to vault.`
         : `Node is on SCROLL LIST but has no live Focus yet — vault entry densened at \`${node.intel_file_path}\`.`,
+      densen?.result?.method === "filesystem"
+        ? `_Vault written · \`${densen.result.fileName || "intelligence.md"}\`_`
+        : densen?.result?.method === "memory"
+          ? `_Intel densened in memory — link 📁 for disk._`
+          : "",
       relayNote,
     ]
       .filter(Boolean)
       .join("\n")
   );
+
+  if (densen?.result?.method === "filesystem" && densen?.result?.ok !== false) {
+    toastVaultWritten(target?.name || node.name || "");
+  }
 
   persist();
   renderAll();
@@ -4760,6 +4818,15 @@ function sendMessage(text) {
       text: turn.reply,
       ts: Date.now(),
     });
+    // Auto write-back: GRIMOIRE's own response → focus vault (background)
+    void queueAutoWriteBack(convo, {
+      eventType: "GRIMOIRE_REPLY",
+      body: turn.reply,
+      source: "Grimoire",
+      category: "node_intel",
+      tags: ["grimoire-reply", "auto-write"],
+      silentToast: true, // user densen toast may also fire; cast path shows Vault written
+    });
   }
 
   // Auto-forge after every user turn, before persist.
@@ -4787,13 +4854,22 @@ function sendMessage(text) {
     }
   }
 
-  // Every interaction densens entity intelligence.md + Cell2 substrate
-  feedCell2FromInteraction(userText, {
+  // Every interaction densens entity intelligence.md + Cell2 substrate (background)
+  void feedCell2FromInteraction(userText, {
     focus: convo,
     source: "user",
     preface: `Interaction on Focus **${convo.name}** (${getFocusType(convo)} · ${getSealedChannel(convo)})`,
     certainty: ensureCertainty(convo),
-  });
+  })
+    .then((entityResult) => {
+      if (
+        entityResult?.method === "filesystem" &&
+        entityResult?.ok !== false
+      ) {
+        toastVaultWritten(convo.name || "");
+      }
+    })
+    .catch((err) => console.warn("[auto-writeback] feed", err));
 
   // Cross-Focus bus relay when other SCROLL nodes are named in chat
   maybeBusAutoRelay(convo, userText)
@@ -4805,6 +4881,15 @@ function sendMessage(text) {
         text: relay.reply,
         ts: Date.now(),
         kind: "bus-relay",
+      });
+      // Relay intel landed on receiving focus vault — ensure write + SCROLL curate
+      void queueAutoWriteBack(convo, {
+        eventType: "BUS_RELAY",
+        body: relay.reply,
+        source: "Grimoire",
+        category: "relationship",
+        tags: ["bus", "relay", "auto-write"],
+        refreshScrollImmediate: true,
       });
       persist();
       renderChat();
@@ -6552,9 +6637,96 @@ function commitSpell(convo, spell, { silentToast = false } = {}) {
   }
 }
 
+/** Debounced "Vault written" toast — avoids spam when cast + reply fire together */
+let vaultWrittenToastTimer = null;
+function toastVaultWritten(detail = "") {
+  clearTimeout(vaultWrittenToastTimer);
+  vaultWrittenToastTimer = setTimeout(() => {
+    const bit = detail ? ` · ${detail}` : "";
+    toast(`Vault written${bit}`, "success");
+  }, 140);
+}
+
 /**
- * Persist sealed Focus intelligence to vault (entity folder append-only).
- * Always surfaces an activity ping; vault fail → amber folder dot.
+ * Auto write-back loop (background). Append-only YAML → focus intelligence.md.
+ * Does not await in callers — use void queueAutoWriteBack(...).
+ * Shows "Vault written" toast on filesystem success; curates SCROLL-LIST.
+ */
+function queueAutoWriteBack(focus, opts = {}) {
+  if (!focus || isCell2CoreFocus(focus)) return Promise.resolve(null);
+  const body = String(opts.body || opts.content || "").trim();
+  if (!body) return Promise.resolve(null);
+
+  const run = async () => {
+    try {
+      let result;
+      if (opts.eventType) {
+        result = await recordFocusEvent(
+          focus,
+          state.spells,
+          opts.eventType,
+          body
+        );
+      } else {
+        result = await autoWriteFocusIntelligence(focus, {
+          body,
+          source: opts.source || "Grimoire",
+          category: opts.category || "node_intel",
+          certainty: opts.certainty || ensureCertainty(focus),
+          tags: opts.tags || ["auto-write"],
+          focusId: focus.id,
+          refreshScroll: true,
+        });
+      }
+      // SCROLL auto-curate (also scheduled inside append; force when bus needs it)
+      if (opts.refreshScrollImmediate) {
+        scheduleScrollListCurate({ immediate: true });
+      }
+      try {
+        persist();
+      } catch {
+        /* ignore */
+      }
+
+      const fileLabel =
+        result?.fileName ||
+        (isFocusVaultLinked(focus.id)
+          ? "intelligence.md"
+          : entityIntelPath(entityIdFromFocus(focus)));
+
+      if (result?.method === "filesystem" && result?.ok !== false) {
+        setVaultFailState(false);
+        const starBit =
+          opts.starsAdded > 0 ? `Constellation +${opts.starsAdded} · ` : "";
+        activityPing(`✦ ${starBit}Vault written: ${fileLabel}`);
+        if (opts.silentToast !== true) toastVaultWritten(focus.name || "");
+      } else if (result?.method === "memory") {
+        setVaultFailState(false);
+        activityPing(
+          `✦ Intel densened (memory · link 📁 for disk: ${fileLabel})`
+        );
+      } else if (result?.method === "error" || result?.ok === false) {
+        setVaultFailState(true);
+        activityPing(`✦ Vault write failed — click 📁 to re-link`);
+      }
+      return result;
+    } catch (err) {
+      console.warn("[auto-writeback]", err);
+      setVaultFailState(true);
+      activityPing(`✦ Vault write failed — click 📁 to re-link`);
+      return null;
+    }
+  };
+
+  // Never block UI — schedule microtask
+  const p = Promise.resolve().then(run);
+  p.catch((err) => console.warn("[auto-writeback] unhandled", err));
+  return p;
+}
+
+/**
+ * Persist sealed Focus intelligence to vault (append-only).
+ * Background write; vault fail → amber folder dot.
  */
 async function syncFocusIntelligenceFile(
   convo,
@@ -6563,58 +6735,16 @@ async function syncFocusIntelligenceFile(
   opts = {}
 ) {
   if (!convo || isCell2CoreFocus(convo)) return;
-  const starsAdded = opts.starsAdded || 0;
-  try {
-    let result;
-    if (eventType) {
-      result = await recordFocusEvent(
-        convo,
-        state.spells,
-        eventType,
-        eventContent || ""
-      );
-    } else {
-      result = await appendEntityIntelligence(convo, {
-        body: eventContent || `Densen · ${convo.name}`,
-        source: opts.source || "Cell2",
-        category: opts.category || "node_intel",
-        certainty: opts.certainty || ensureCertainty(convo),
-      });
-    }
-    // Keep global AI index current
-    try {
-      await updateScrollListIndex(state.conversations, state.spells);
-    } catch {
-      /* non-fatal */
-    }
-    persist();
-
-    const fileLabel =
-      result?.fileName || entityIntelPath(entityIdFromFocus(convo));
-
-    if (result?.method === "filesystem" && result?.ok !== false) {
-      setVaultFailState(false);
-      const starBit =
-        starsAdded > 0 ? `Constellation +${starsAdded} · ` : "";
-      activityPing(`✦ ${starBit}Vault written: ${fileLabel}`);
-    } else if (result?.method === "memory") {
-      setVaultFailState(false);
-      activityPing(`✦ Intel densened (memory · link 📁 for disk: ${fileLabel})`);
-    } else if (result?.method === "no-folder") {
-      setVaultFailState(true);
-      activityPing(`✦ Vault not linked — click 📁 to capture ${fileLabel}`);
-    } else if (result?.method === "download") {
-      setVaultFailState(false);
-      activityPing(`✦ Saved via download: ${fileLabel}`);
-    } else if (result?.method === "error" || result?.ok === false) {
-      setVaultFailState(true);
-      activityPing(`✦ Vault write failed — click 📁 to re-link`);
-    }
-  } catch (err) {
-    console.warn("Intelligence sync failed", err);
-    setVaultFailState(true);
-    activityPing(`✦ Vault write failed — click 📁 to re-link`);
-  }
+  return queueAutoWriteBack(convo, {
+    eventType: eventType || null,
+    body: eventContent || `Densen · ${convo.name}`,
+    source: opts.source || "Grimoire",
+    category: opts.category || "node_intel",
+    certainty: opts.certainty || ensureCertainty(convo),
+    tags: opts.tags || ["auto-write", eventType || "densen"].filter(Boolean),
+    starsAdded: opts.starsAdded || 0,
+    silentToast: opts.silentToast === true,
+  });
 }
 
 /**
@@ -7525,15 +7655,29 @@ function markSent(id, { fromCopy = false, fromSelfCast = false, silent = false }
       });
       setFocusUniverse(deriveFocusSnapshot(focus, state.spells), { warp: false });
     }
-    syncFocusIntelligenceFile(
-      focus,
-      fromSelfCast
-        ? "SPELL_SELF_CAST"
-        : isNodeEngageSpell(spell)
-          ? "NODE_ENGAGE_CAST"
-          : "SPELL_SENT",
-      `${spell.purpose} ${fromSelfCast ? "SELF-CAST into Focus chat" : "CAST"} via ${spell.medium} at ${new Date(spell.sentAt).toISOString()}`
-    );
+    // Auto write-back: full cast payload → focus intelligence.md (background)
+    const castKind = fromSelfCast
+      ? "SPELL_SELF_CAST"
+      : isNodeEngageSpell(spell)
+        ? "NODE_ENGAGE_CAST"
+        : "SPELL_SENT";
+    const castBody = [
+      `**${castKind}** · ${spellFaceTitle(spell)} · v${spell.iteration || 1}`,
+      `Target: ${spell.target || focus.name}`,
+      `Medium: ${spell.medium || getSealedChannel(focus)}`,
+      `At: ${new Date(spell.sentAt || Date.now()).toISOString()}`,
+      fromSelfCast ? "Mode: SELF-CAST into Focus chat" : "Mode: CAST sealed to history",
+      ``,
+      formatSpellMarkdown(spell),
+    ].join("\n");
+    void queueAutoWriteBack(focus, {
+      eventType: castKind,
+      body: castBody,
+      source: "Grimoire",
+      category: isAlignmentSpell(spell) ? "identity" : "node_intel",
+      tags: ["spell-cast", "auto-write", spell.kind || "spell"].filter(Boolean),
+      silentToast: silent === true,
+    });
   }
 
   if (silent) return;

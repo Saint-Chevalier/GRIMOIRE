@@ -1363,6 +1363,39 @@ async function getEntityDirectory(root, entityId, { create = true } = {}) {
   return ent;
 }
 
+/** True when handle is a dedicated per-focus vault (<Name>-FocusIntelligence). */
+export function isPerFocusVaultRoot(handle) {
+  const name = String(handle?.name || "");
+  // Global vault is also *FocusIntelligence — keep entity subfolders there
+  if (/^GRIMOIRE-FocusIntelligence$/i.test(name)) return false;
+  if (name === INTEL_DIR_NAME) return false;
+  return /-FocusIntelligence$/i.test(name);
+}
+
+/**
+ * Resolve intelligence.md write target.
+ * Per-focus vault → <FocusName>-FocusIntelligence/intelligence.md (root)
+ * Global vault → <entity-id>/intelligence.md
+ */
+async function openIntelligenceWriteTarget(root, entityId, focus = null) {
+  if (!root) return null;
+  if (isPerFocusVaultRoot(root)) {
+    const fh = await root.getFileHandle("intelligence.md", { create: true });
+    return {
+      fh,
+      relPath: "intelligence.md",
+      vaultLabel: root.name || "FocusIntelligence",
+    };
+  }
+  const entDir = await getEntityDirectory(root, entityId, { create: true });
+  const fh = await entDir.getFileHandle("intelligence.md", { create: true });
+  return {
+    fh,
+    relPath: entityIntelPath(entityId),
+    vaultLabel: root.name || INTEL_DIR_NAME,
+  };
+}
+
 async function appendTextToFileHandle(fileHandle, block, { headerIfEmpty } = {}) {
   let existing = "";
   try {
@@ -1373,6 +1406,7 @@ async function appendTextToFileHandle(fileHandle, block, { headerIfEmpty } = {})
   if (!existing || !String(existing).trim()) {
     existing = headerIfEmpty || "";
   }
+  // Append-only: never truncate prior body
   const next = String(existing).replace(/\s*$/, "") + "\n" + block;
   const writable = await fileHandle.createWritable();
   await writable.write(next);
@@ -1380,8 +1414,55 @@ async function appendTextToFileHandle(fileHandle, block, { headerIfEmpty } = {})
   return next;
 }
 
+// ── SCROLL auto-curate after vault writes (debounced) ──
+/** @type {null | (() => { conversations?: array, spells?: array })} */
+let scrollCurateProvider = null;
+let scrollCurateTimer = null;
+
 /**
- * Append-only write to GRIMOIRE-FocusIntelligence/<entity-id>/intelligence.md
+ * App registers live state provider so vault writes can refresh SCROLL-LIST.md
+ * without a manual operator action.
+ */
+export function setScrollListCurateProvider(fn) {
+  scrollCurateProvider = typeof fn === "function" ? fn : null;
+}
+
+/** Debounced rewrite of vault SCROLL-LIST.md from live focuses. */
+export function scheduleScrollListCurate({ immediate = false } = {}) {
+  const run = async () => {
+    scrollCurateTimer = null;
+    if (!scrollCurateProvider) return null;
+    try {
+      const pack = scrollCurateProvider() || {};
+      return await updateScrollListIndex(
+        pack.conversations || [],
+        pack.spells || []
+      );
+    } catch (err) {
+      console.warn("scheduleScrollListCurate", err);
+      return null;
+    }
+  };
+  if (immediate) {
+    if (scrollCurateTimer) {
+      clearTimeout(scrollCurateTimer);
+      scrollCurateTimer = null;
+    }
+    return run();
+  }
+  if (scrollCurateTimer) clearTimeout(scrollCurateTimer);
+  scrollCurateTimer = setTimeout(() => {
+    void run();
+  }, 280);
+  return null;
+}
+
+/**
+ * Append-only write to focus intelligence.md
+ * - Per-focus vault: <FocusName>-FocusIntelligence/intelligence.md
+ * - Global vault: GRIMOIRE-FocusIntelligence/<entity-id>/intelligence.md
+ * YAML frontmatter + body. Never overwrites prior entries.
+ * Schedules SCROLL-LIST auto-curate after successful disk write.
  */
 export async function appendEntityIntelligence(focusOrId, opts = {}) {
   const focus =
@@ -1435,23 +1516,28 @@ export async function appendEntityIntelligence(focusOrId, opts = {}) {
     tags: entry.tags,
     body,
   });
-  const relPath = entityIntelPath(entityId);
   // Prefer this focus's own vault folder
   const root = await getVaultRoot(focusId);
+  let relPath = entityIntelPath(entityId);
 
   if (root) {
     try {
-      const entDir = await getEntityDirectory(root, entityId, { create: true });
-      const fh = await entDir.getFileHandle("intelligence.md", { create: true });
-      await appendTextToFileHandle(fh, block, {
+      const target = await openIntelligenceWriteTarget(root, entityId, focus);
+      relPath = target?.relPath || relPath;
+      await appendTextToFileHandle(target.fh, block, {
         headerIfEmpty: entityIntelHeader(focus || entityId),
       });
+      // SCROLL List auto-curates from vault writes (no manual refresh)
+      if (opts.refreshScroll !== false) {
+        scheduleScrollListCurate({ immediate: false });
+      }
       return {
         ok: true,
         method: "filesystem",
         fileName: relPath,
         entityId,
         entry,
+        vaultLabel: target?.vaultLabel || root.name || "",
       };
     } catch (err) {
       console.warn("appendEntityIntelligence failed", err);
@@ -1473,6 +1559,23 @@ export async function appendEntityIntelligence(focusOrId, opts = {}) {
     entityId,
     entry,
   };
+}
+
+/**
+ * Background-friendly auto write-back for cast / bus / grimoire replies.
+ * Append-only YAML entry; never blocks the caller when used with void.
+ */
+export async function autoWriteFocusIntelligence(focusOrId, opts = {}) {
+  return appendEntityIntelligence(focusOrId, {
+    source: opts.source || "Grimoire",
+    category: opts.category || "node_intel",
+    certainty: opts.certainty || "inferred",
+    tags: opts.tags || ["auto-write"],
+    body: opts.body || opts.content || "",
+    focusId: opts.focusId,
+    refreshScroll: opts.refreshScroll !== false,
+    timestamp: opts.timestamp,
+  });
 }
 
 /** Cell2 Core append — system substrate only */
@@ -2136,8 +2239,13 @@ export async function densenBusMessage(nodeOrFocus, message, opts = {}) {
     source: opts.source || "user",
     category: opts.category || "node_intel",
     certainty: opts.certainty || "inferred",
-    tags: ["bus", bus.kind, bus.channel].filter(Boolean),
+    tags: ["bus", bus.kind, bus.channel, "auto-write"].filter(Boolean),
+    focusId: opts.focusId || focusLike.id || null,
+    refreshScroll: true,
   });
+
+  // Ensure SCROLL curates even if append returned memory-only
+  scheduleScrollListCurate({ immediate: false });
 
   pushBusActivity({
     kind: bus.kind,
