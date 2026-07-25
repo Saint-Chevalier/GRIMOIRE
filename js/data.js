@@ -891,6 +891,31 @@ export function hasSpellIntent(text) {
 }
 
 /**
+ * Spell face category — drives sidebar left-border color only.
+ * Detail modal / cast flow do not depend on this.
+ */
+export const SPELL_CATEGORIES = Object.freeze([
+  "doctrine",
+  "engage",
+  "curiosity",
+  "alignment",
+  "directive",
+  "audit",
+  "default",
+]);
+
+/** Canonical category → stripe color (sidebar face) */
+export const SPELL_CATEGORY_COLORS = Object.freeze({
+  doctrine: "#8b5cf6",
+  engage: "#3b82f6",
+  curiosity: "#06b6d4",
+  alignment: "#f59e0b",
+  directive: "#10b981",
+  audit: "#f97316",
+  default: "#6b7280",
+});
+
+/**
  * Infer catalog tags from spell body/kind (doctrine, alignment, curiosity, …).
  */
 export function inferSpellTags(spell) {
@@ -924,10 +949,85 @@ export function inferSpellTags(spell) {
 }
 
 /**
+ * Infer a single face category for sidebar color mapping.
+ * Priority: explicit category → kind → tags → body heuristics → default.
+ */
+export function inferSpellCategory(spell) {
+  const explicit = String(spell?.category || "")
+    .toLowerCase()
+    .trim();
+  if (explicit && SPELL_CATEGORIES.includes(explicit)) return explicit;
+
+  const kind = String(spell?.kind || "").toLowerCase();
+  if (kind === "alignment") return "alignment";
+  if (kind === "healer" || kind === "self-check") return "audit";
+  if (kind === "propagate" || kind === "message") return "engage";
+
+  const tags = Array.isArray(spell?.tags) ? spell.tags.map((t) => String(t).toLowerCase()) : [];
+  for (const cat of [
+    "alignment",
+    "curiosity",
+    "engage",
+    "doctrine",
+    "audit",
+    "directive",
+  ]) {
+    if (tags.includes(cat)) return cat;
+  }
+
+  const body = [
+    spell?.purpose,
+    spell?.title,
+    spell?.essence,
+    spell?.subtitle,
+    spell?.message,
+    spell?.content,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+
+  if (/alignment\s*reveal|transparency\s*&\s*alignment|alignment/.test(body)) {
+    return "alignment";
+  }
+  if (/curiosity|ecosystem links|linked node|nucleus focus/.test(body)) {
+    return "curiosity";
+  }
+  if (/engage|proactive node|scroll list|broadcast|propagat/.test(body)) {
+    return "engage";
+  }
+  if (/doctrine|eternal truth|covenant|law of/.test(body)) return "doctrine";
+  if (
+    /\baudit\b|self-?check|healer|integrity scan|verify|checklist|health covenant/.test(
+      body
+    )
+  ) {
+    return "audit";
+  }
+  if (/directive|instruct|forge|cast spell|operational/.test(body) || kind === "directive") {
+    return "directive";
+  }
+  if (kind === "self-cast" || kind === "standard" || kind === "machine") {
+    return "directive";
+  }
+  return "default";
+}
+
+/** Normalize category string to a known SPELL_CATEGORIES value */
+export function normalizeSpellCategory(cat) {
+  const v = String(cat || "")
+    .toLowerCase()
+    .trim();
+  if (SPELL_CATEGORIES.includes(v)) return v;
+  return "default";
+}
+
+/**
  * Normalize spell to face + content model.
- * Face: title, subtitle, target, iteration, status, tags
+ * Face: title, target, iteration, status, category (sidebar stripe)
  * Content: content (or message) — the copy/send payload
  * Versions: iteration history for refine/repeat
+ * Detail modal still uses subtitle / tags / glyphs / contribution.
  */
 export function normalizeSpell(spell) {
   if (!spell || typeof spell !== "object") return spell;
@@ -936,7 +1036,7 @@ export function normalizeSpell(spell) {
   if (!spell.content && spell.message) spell.content = spell.message;
   if (!spell.message && spell.content) spell.message = spell.content;
 
-  // Face title / subtitle (purpose/essence remain for legacy callers)
+  // Face title / subtitle (purpose/essence remain for legacy callers + detail modal)
   if (!spell.title) spell.title = String(spell.purpose || "Untitled spell").trim() || "Untitled spell";
   if (!spell.purpose) spell.purpose = spell.title;
   if (!spell.subtitle) {
@@ -981,6 +1081,13 @@ export function normalizeSpell(spell) {
     spell.tags = spell.tags.map((t) => String(t || "").trim().toLowerCase()).filter(Boolean).slice(0, 8);
   }
 
+  // Category for sidebar color stripe (re-infer when missing/invalid)
+  spell.category = normalizeSpellCategory(
+    SPELL_CATEGORIES.includes(String(spell.category || "").toLowerCase())
+      ? spell.category
+      : inferSpellCategory(spell)
+  );
+
   // Version history
   if (!Array.isArray(spell.versions)) {
     spell.versions = [
@@ -1006,7 +1113,7 @@ export function normalizeSpell(spell) {
     spell.castTimestamp = spell.sentAt || spell.answeredAt || null;
   }
 
-  // Lifecycle meta for face / detail
+  // Lifecycle meta for detail modal (not card face)
   if (spell.lastCast == null) {
     spell.lastCast = spell.castTimestamp || spell.sentAt || spell.answeredAt || null;
   }
@@ -1021,6 +1128,21 @@ export function normalizeSpell(spell) {
   if (!Array.isArray(spell.glyphs)) spell.glyphs = [];
 
   return spell;
+}
+
+/**
+ * Compact face status key for status-dot coloring.
+ * ready | in-progress | history
+ */
+export function spellFaceStatusKey(spell) {
+  if (!spell) return "ready";
+  if (spell.awaitingReply) return "in-progress";
+  const st = String(spell.status || "ready").toLowerCase();
+  if (st === "draft" || st === "in-progress" || st === "casting") return "in-progress";
+  if (st === "history" || st === "sent" || st === "archived" || st === "cast") {
+    return "history";
+  }
+  return "ready";
 }
 
 /** Human status label for card face */

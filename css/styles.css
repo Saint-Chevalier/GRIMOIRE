@@ -3679,6 +3679,67 @@ body.universe-view-active .message.system {
   box-sizing: border-box;
 }
 
+/* Compact tag-style spell cards (sidebar list only) */
+.spell-item.spell-card-compact {
+  padding: 0.45rem 1.65rem 0.45rem 0.65rem;
+  gap: 0.28rem;
+  border-left-width: 3px;
+  border-left-style: solid;
+  border-left-color: #6b7280;
+  min-height: 0;
+}
+.spell-item.spell-card-compact.spell-cat-doctrine {
+  border-left-color: #8b5cf6;
+}
+.spell-item.spell-card-compact.spell-cat-engage {
+  border-left-color: #3b82f6;
+}
+.spell-item.spell-card-compact.spell-cat-curiosity {
+  border-left-color: #06b6d4;
+}
+.spell-item.spell-card-compact.spell-cat-alignment {
+  border-left-color: #f59e0b;
+}
+.spell-item.spell-card-compact.spell-cat-directive {
+  border-left-color: #10b981;
+}
+.spell-item.spell-card-compact.spell-cat-audit {
+  border-left-color: #f97316;
+}
+.spell-item.spell-card-compact.spell-cat-default {
+  border-left-color: #6b7280;
+}
+/* Keep category stripe vivid even on hold/history */
+.spell-item.spell-card-compact.spell-hold {
+  filter: none;
+  opacity: 0.78;
+}
+.spell-item.spell-card-compact.spell-hold:hover {
+  opacity: 0.92;
+}
+.spell-item.spell-card-compact.spell-history {
+  opacity: 0.88;
+}
+.spell-item.spell-card-compact.spell-primary {
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.1), 0 0 12px rgba(167, 139, 250, 0.08);
+}
+.spell-item.spell-card-compact .delete-btn {
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  font-size: 10px;
+}
+.spell-item.spell-card-compact .spell-actions-compact {
+  margin-top: 0.1rem;
+  gap: 0.25rem;
+}
+.spell-item.spell-card-compact .btn-spell.self-cast {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.62rem;
+}
+
 .spell-item.spell-tap-copy {
   cursor: pointer;
 }
@@ -3751,7 +3812,7 @@ body.universe-view-active .message.system {
   }
 }
 
-/* ── Spell FACE (card chrome) — not the copy payload ── */
+/* ── Spell FACE (sidebar compact chrome) — not the copy payload ── */
 .spell-face {
   display: flex;
   flex-direction: column;
@@ -3759,6 +3820,9 @@ body.universe-view-active .message.system {
   min-width: 0;
   width: 100%;
   padding-right: 0.15rem;
+}
+.spell-face-compact {
+  gap: 0.2rem;
 }
 .spell-face-top {
   display: flex;
@@ -3782,6 +3846,14 @@ body.universe-view-active .message.system {
   -webkit-box-orient: vertical;
   white-space: normal;
 }
+.spell-face-compact .spell-face-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.25;
+  -webkit-line-clamp: 1;
+  display: block;
+  white-space: nowrap;
+}
 .spell-face-version {
   flex-shrink: 0;
   font-size: 0.68rem;
@@ -3794,6 +3866,53 @@ body.universe-view-active .message.system {
   padding: 0.12rem 0.4rem;
   line-height: 1.2;
 }
+.spell-face-compact .spell-face-version {
+  font-size: 0.62rem;
+  padding: 0.08rem 0.34rem;
+  margin-top: 0.05rem;
+}
+/* Compact second row: status dot + @target tag */
+.spell-face-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.spell-face-status-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6b7280;
+  box-shadow: 0 0 0 2px rgba(107, 114, 128, 0.2);
+}
+.spell-face-status-dot.status-ready {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.22);
+}
+.spell-face-status-dot.status-in-progress {
+  background: #eab308;
+  box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.25);
+}
+.spell-face-status-dot.status-history {
+  background: #6b7280;
+  box-shadow: 0 0 0 2px rgba(107, 114, 128, 0.2);
+}
+.spell-face-target-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: rgba(196, 181, 253, 0.95);
+  background: rgba(167, 139, 250, 0.1);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  border-radius: 999px;
+  padding: 0.06rem 0.4rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+/* Detail modal may still use legacy face meta pieces */
 .spell-face-subtitle {
   margin: 0;
   font-size: 0.74rem;
@@ -3885,6 +4004,23 @@ body.universe-view-active .message.system {
   flex-wrap: wrap;
   gap: 0.22rem;
   margin-top: 0.12rem;
+}
+/* Hide receipt-style chrome on compact sidebar cards only */
+.spell-item.spell-card-compact .spell-face-subtitle,
+.spell-item.spell-card-compact .spell-face-lifecycle,
+.spell-item.spell-card-compact .spell-face-refine-note,
+.spell-item.spell-card-compact .spell-face-tags,
+.spell-item.spell-card-compact .spell-face-contrib,
+.spell-item.spell-card-compact .spell-timestamps,
+.spell-item.spell-card-compact .spell-tap-hint,
+.spell-item.spell-card-compact .spell-item-meta,
+.spell-item.spell-card-compact .status-badge {
+  display: none !important;
+}
+.spell-await-banner-compact {
+  font-size: 0.62rem;
+  padding: 0.2rem 0.4rem;
+  gap: 0.3rem;
 }
 .spell-lifecycle-actions {
   display: flex;

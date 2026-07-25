@@ -43,8 +43,10 @@ import {
   normalizeSpell,
   spellStatusLabel,
   spellFaceTitle,
+  spellFaceStatusKey,
   refineSpellVersion,
   inferSpellTags,
+  inferSpellCategory,
   applySpellNodeContribution,
   loadState,
   makeFocusId,
@@ -81,13 +83,13 @@ import {
   roadmapHelpText,
   flattenRoadmapSteps,
   ROADMAP_STATUSES,
-} from "./data.js?v=roadmap-engine-1";
+} from "./data.js?v=spell-face-compact-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=roadmap-engine-1";
+} from "./stars.js?v=spell-face-compact-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -95,7 +97,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=roadmap-engine-1";
+} from "./universe.js?v=spell-face-compact-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -146,12 +148,12 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=roadmap-engine-1";
+} from "./intelligence.js?v=spell-face-compact-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=roadmap-engine-1";
+} from "./health.js?v=spell-face-compact-1";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -2604,10 +2606,10 @@ async function renderSpells() {
     if (els.spellsHint) {
       els.spellsHint.textContent =
         view === "history"
-          ? "Past casts with versions. Promote to Active to repeat · Refine bumps vN."
+          ? "Past casts. Click a card for full detail · Cast again from the modal."
           : view === "library"
-            ? "All spells. Promote to Active on the current focus to cast again."
-            : "Spell face = title · intent · target · version · intel mix. Click a card for full detail.";
+            ? "All spells. Click a card for full detail · promote from the modal."
+            : "Compact spell face · click a card for full detail.";
     }
 
     if (!convo && view !== "library") {
@@ -2652,13 +2654,17 @@ async function renderSpells() {
         spell.kind = "self-cast";
       }
       const isAwaiting = Boolean(spell.awaitingReply);
+      const category =
+        spell.category || inferSpellCategory(spell) || "default";
       item.className =
-        "spell-item spell-face-card spell-tap-copy" +
+        "spell-item spell-face-card spell-tap-copy spell-card-compact" +
+        ` spell-cat-${category}` +
         (isHist ? " spell-history" : "") +
         (mode === "primary" ? " spell-primary" : mode === "library" ? " spell-library" : " spell-hold") +
         (showSelf ? " spell-self-castable" : "") +
         (isAwaiting ? " spell-awaiting-reply" : "");
       item.dataset.spellId = spell.id;
+      item.dataset.category = category;
       if (showSelf) item.dataset.selfCast = "1";
       if (isAwaiting) item.dataset.awaitingReply = "1";
       item.setAttribute("role", "button");
@@ -2667,47 +2673,27 @@ async function renderSpells() {
         ? "Awaiting paste reply in chat — click for detail"
         : "Click to open spell detail";
 
-      const timeBits = [];
-      if (spell.createdAt) timeBits.push(`forged ${formatSpellTime(spell.createdAt)}`);
-      if (spell.iteration > 1) timeBits.push(`v${spell.iteration}`);
-      if (spell.copiedAt) timeBits.push(`copied ${formatSpellTime(spell.copiedAt)}`);
-      if (spell.sentAt) timeBits.push(`cast ${formatSpellTime(spell.sentAt)}`);
-      if (spell.answeredAt) timeBits.push(`answered ${formatSpellTime(spell.answeredAt)}`);
-      const timeLine = timeBits.length
-        ? `<div class="spell-timestamps">${escapeHtml(timeBits.join(" · "))}</div>`
-        : "";
-
       const owner = convo || resolveSpellFocus(spell);
-      // Library cards may belong to other focuses — use that focus's metrics when available
-      let cardContrib = focusContrib;
-      if (mode === "library" && spell.conversationId && spell.conversationId !== convo?.id) {
-        const cached = contribCache.get(spell.conversationId);
-        cardContrib = cached?.data || null;
-      }
 
       item.innerHTML = `
         <button type="button" class="delete-btn" data-action="delete" title="${isHist ? "Prune from history" : "Delete spell"}">✕</button>
         ${
           isAwaiting
             ? `<button type="button" class="spell-await-cancel" data-action="cancel-await" title="Cancel await reply">×</button>
-               <div class="spell-await-banner" aria-live="polite">
+               <div class="spell-await-banner spell-await-banner-compact" aria-live="polite">
                  <span class="spell-await-pulse" aria-hidden="true"></span>
-                 <span>pasted Reply expected</span>
+                 <span>awaiting reply</span>
                </div>`
             : ""
         }
-        ${spellCardFaceHtml(spell, owner, { contrib: cardContrib })}
-        ${timeLine}
-        <div class="spell-actions spell-actions-compact">
-          <span class="spell-tap-hint" aria-hidden="true">${
-            isAwaiting ? "paste reply in chat to seal" : "click for detail"
-          }</span>
-          ${
-            shouldShowSelfCastButton(spell, owner)
-              ? `<button type="button" class="btn-spell self-cast" data-action="self-cast" title="SELF-CAST into Focus chat">SELF-CAST</button>`
-              : ""
-          }
-        </div>
+        ${spellCardFaceHtml(spell, owner)}
+        ${
+          shouldShowSelfCastButton(spell, owner)
+            ? `<div class="spell-actions spell-actions-compact">
+                <button type="button" class="btn-spell self-cast" data-action="self-cast" title="SELF-CAST into Focus chat">SELF-CAST</button>
+              </div>`
+            : ""
+        }
       `;
       wireSpellCardActions(item, spell, {
         sealOnCopy: false,
@@ -2790,85 +2776,39 @@ function spellIsNodeBridge(spell) {
 }
 
 /**
- * SPELL FACE — what the card shows (not the copy payload).
- * Title · subtitle · target · iteration · status · tags.
- * No NEW / BRIDGE / READY operational badges.
+ * SPELL FACE (sidebar only) — compact tag-style row.
+ * Title · version · status-dot · @target. No description, paths, or op badges.
+ * Full detail lives in the spell detail modal.
  */
-function spellCardFaceHtml(spell, convo, { contrib = null } = {}) {
+function spellCardFaceHtml(spell, convo, _opts = {}) {
   normalizeSpell(spell);
   const title = spellFaceTitle(spell);
-  const subtitle = String(spell.subtitle || spell.essence || "").trim();
   const target = String(spell.target || convo?.name || "Focus").trim();
   const iter = Number(spell.iteration) || 1;
-  const status = spellStatusLabel(spell);
-  const tags = Array.isArray(spell.tags) && spell.tags.length
-    ? spell.tags
-    : inferSpellTags(spell);
-  const tagsHtml = tags
-    .slice(0, 5)
-    .map((t) => `<span class="spell-face-tag">${escapeHtml(t)}</span>`)
-    .join("");
-  const breakdown =
-    contrib ||
-    (spell.nodeContribution?.rows
-      ? { rows: spell.nodeContribution.rows, empty: spell.nodeContribution.empty }
-      : null);
-
-  const castCount = Number(spell.castCount) || 0;
-  const lastCast = spell.lastCast || spell.castTimestamp || spell.sentAt || null;
-  const lastCastLabel = lastCast ? formatSpellTime(lastCast) : "";
-  const refineNote = String(spell.refinementNote || "").trim();
-  const glyphN = Array.isArray(spell.glyphs) ? spell.glyphs.length : 0;
+  const statusKey = spellFaceStatusKey(spell);
+  const statusLabel =
+    statusKey === "in-progress"
+      ? "In progress"
+      : statusKey === "history"
+        ? "History"
+        : "Ready";
+  const category = spell.category || inferSpellCategory(spell) || "default";
+  const targetLabel = target.startsWith("@") ? target : `@${target}`;
 
   return `
-    <div class="spell-face">
+    <div class="spell-face spell-face-compact" data-category="${escapeAttr(category)}">
       <div class="spell-face-top">
         <h3 class="spell-face-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
-        <span class="spell-face-version" title="Iteration">v${iter}</span>
+        <span class="spell-face-version" title="Version">v${iter}</span>
       </div>
-      ${
-        subtitle
-          ? `<p class="spell-face-subtitle">${escapeHtml(subtitle)}</p>`
-          : ""
-      }
-      <div class="spell-face-meta">
-        <span class="spell-face-target" title="Target">${escapeHtml(target)}</span>
-        <span class="spell-face-status spell-face-status-${escapeHtml(
-          String(spell.status || "ready").toLowerCase()
-        )}">${escapeHtml(status)}</span>
+      <div class="spell-face-row">
+        <span
+          class="spell-face-status-dot status-${escapeAttr(statusKey)}"
+          title="${escapeHtml(statusLabel)}"
+          aria-label="${escapeHtml(statusLabel)}"
+        ></span>
+        <span class="spell-face-target-tag" title="Target node">${escapeHtml(targetLabel)}</span>
       </div>
-      <div class="spell-face-lifecycle">
-        ${
-          castCount > 0
-            ? `<span class="spell-face-cast-count" title="Cast count">${castCount} cast${
-                castCount === 1 ? "" : "s"
-              }</span>`
-            : ""
-        }
-        ${
-          lastCastLabel
-            ? `<span class="spell-face-last-cast" title="Last cast">Last: ${escapeHtml(
-                lastCastLabel
-              )}</span>`
-            : ""
-        }
-        ${
-          glyphN > 0
-            ? `<span class="spell-face-glyph-count" title="Linked glyphs">${glyphN} glyph${
-                glyphN === 1 ? "" : "s"
-              }</span>`
-            : ""
-        }
-      </div>
-      ${
-        refineNote
-          ? `<p class="spell-face-refine-note" title="Refinement note">${escapeHtml(
-              refineNote
-            )}</p>`
-          : ""
-      }
-      ${tagsHtml ? `<div class="spell-face-tags">${tagsHtml}</div>` : ""}
-      ${contribMiniHtml(breakdown, { compact: true })}
     </div>`;
 }
 
