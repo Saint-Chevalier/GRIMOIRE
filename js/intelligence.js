@@ -1578,6 +1578,416 @@ export async function autoWriteFocusIntelligence(focusOrId, opts = {}) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// X Recruitment Intake — Magic Knights (Wizard King)
+// Path: magic-knights/[handle]/intelligence.md
+// Privacy: X handle never public unless knighthood classification === "yes"
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const MAGIC_KNIGHTS_DIR = "magic-knights";
+export const MAGIC_KNIGHTHOOD = Object.freeze(["yes", "no", "maybe"]);
+
+/** @type {Map<string, object>} handle → latest intake (memory) */
+const magicKnightMemory = new Map();
+
+/** Sanitize X handle → filesystem-safe slug (no @) */
+export function sanitizeXHandle(raw) {
+  let h = String(raw || "")
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/[^a-zA-Z0-9_]/g, "")
+    .slice(0, 40);
+  return h || "unknown";
+}
+
+/** Public-safe label: real handle only when knighthood is yes */
+export function publicMagicKnightLabel(record) {
+  if (!record) return "candidate";
+  const k = String(record.knighthood || "maybe").toLowerCase();
+  if (k === "yes" && record.handle) return `@${sanitizeXHandle(record.handle)}`;
+  // Redacted public surface
+  const slug = sanitizeXHandle(record.handle || "x");
+  const hash = slug
+    .split("")
+    .reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+  return `mk-candidate-${Math.abs(hash).toString(36).slice(0, 6)}`;
+}
+
+/**
+ * SCROLL / Wizard King classifier → yes | no | maybe
+ * Uses signal level + assessment notes + first-message heuristics.
+ */
+export function classifyMagicKnighthood({
+  signal = 5,
+  notes = "",
+  snippet = "",
+  handle = "",
+} = {}) {
+  const sig = Math.max(0, Math.min(10, Number(signal) || 0));
+  const corpus = `${notes}\n${snippet}\n${handle}`.toLowerCase();
+
+  let score = sig;
+  // Boosts
+  if (
+    /\b(builder|ship|ships|craft|knight|clover|operator|sovereign|vault|forge|open.?source|contribute)\b/.test(
+      corpus
+    )
+  ) {
+    score += 1.5;
+  }
+  if (/\b(align|doctrine|signal|constellation|grimoire)\b/.test(corpus)) {
+    score += 0.75;
+  }
+  // Red flags
+  if (
+    /\b(spam|scam|bot|airdrop|crypto.?shill|hostile|harass|doxx?|blackmail)\b/.test(
+      corpus
+    )
+  ) {
+    score -= 5.5;
+  }
+  if (/\b(not interested|unsubscribe|stop dm|leave me alone)\b/.test(corpus)) {
+    score -= 2;
+  }
+  // Explicit override in notes
+  if (/\b(knighthood\s*[:=]\s*yes|classify\s*[:=]\s*yes|mk\s*:\s*yes)\b/i.test(notes)) {
+    return {
+      knighthood: "yes",
+      score,
+      rationale: "explicit yes in assessment notes",
+    };
+  }
+  if (/\b(knighthood\s*[:=]\s*no|classify\s*[:=]\s*no|mk\s*:\s*no)\b/i.test(notes)) {
+    return {
+      knighthood: "no",
+      score,
+      rationale: "explicit no in assessment notes",
+    };
+  }
+  if (
+    /\b(knighthood\s*[:=]\s*maybe|classify\s*[:=]\s*maybe|mk\s*:\s*maybe)\b/i.test(
+      notes
+    )
+  ) {
+    return {
+      knighthood: "maybe",
+      score,
+      rationale: "explicit maybe in assessment notes",
+    };
+  }
+
+  let knighthood = "maybe";
+  let rationale = `signal ${sig} → baseline maybe`;
+  if (score >= 7.5) {
+    knighthood = "yes";
+    rationale = `score ${score.toFixed(1)} (signal ${sig} + green flags) → yes`;
+  } else if (score <= 3.5) {
+    knighthood = "no";
+    rationale = `score ${score.toFixed(1)} (signal ${sig} / red flags) → no`;
+  } else {
+    rationale = `score ${score.toFixed(1)} (signal ${sig}) → maybe`;
+  }
+  return { knighthood, score, rationale };
+}
+
+/**
+ * Parse slash / natural-language Magic Knight intake.
+ * Commands:
+ *   /mk @handle signal:7 first: "snippet" notes: ...
+ *   /recruit @handle 7 "snippet" assessment...
+ * Natural (Wizard King context):
+ *   DM @handle: message
+ *   DMed @handle on X: message
+ *   X DM @handle signal 8 — notes
+ * @returns {null | { handle, signal, snippet, notes, raw }}
+ */
+export function parseMagicKnightIntake(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  // /mk @handle ...  or  /recruit @handle ...
+  const slash = raw.match(/^\/(?:mk|recruit|knight)\s+([\s\S]+)$/i);
+  if (slash) {
+    return parseMagicKnightBody(slash[1].trim(), raw);
+  }
+
+  // Natural DM patterns
+  const dm =
+    raw.match(
+      /^(?:dm(?:ed|\'d|ed)?|x\s*dm|messaged|reached out to)\s+@?([A-Za-z0-9_]{1,40})\s*(?:on\s+x)?\s*[:\-—]\s*([\s\S]+)$/i
+    ) ||
+    raw.match(
+      /^@([A-Za-z0-9_]{1,40})\s+(?:dm|x\s*dm)\s*[:\-—]\s*([\s\S]+)$/i
+    );
+  if (dm) {
+    const handle = sanitizeXHandle(dm[1]);
+    const rest = String(dm[2] || "").trim();
+    const sigM = rest.match(/\bsignal\s*[:=]?\s*(\d{1,2})\b/i);
+    const signal = sigM ? Math.min(10, Number(sigM[1])) : 5;
+    const snippet = rest
+      .replace(/\bsignal\s*[:=]?\s*\d{1,2}\b/i, "")
+      .replace(/\bnotes?\s*[:=]\s*/i, "")
+      .trim()
+      .slice(0, 500);
+    return {
+      handle,
+      signal,
+      snippet,
+      notes: rest.slice(0, 800),
+      raw,
+      source: "natural-dm",
+    };
+  }
+
+  return null;
+}
+
+function parseMagicKnightBody(body, raw) {
+  // Handle first token
+  const hm = body.match(/^@?([A-Za-z0-9_]{1,40})\b/);
+  if (!hm) return null;
+  const handle = sanitizeXHandle(hm[1]);
+  let rest = body.slice(hm[0].length).trim();
+
+  let signal = 5;
+  const sigM =
+    rest.match(/\bsignal\s*[:=]\s*(\d{1,2})\b/i) ||
+    rest.match(/^(\d{1,2})\b/);
+  if (sigM) {
+    signal = Math.max(0, Math.min(10, Number(sigM[1])));
+    rest = rest.replace(sigM[0], "").trim();
+  }
+
+  let snippet = "";
+  const firstM =
+    rest.match(/\b(?:first|snippet|msg|message)\s*[:=]\s*"([^"]+)"/i) ||
+    rest.match(/\b(?:first|snippet|msg|message)\s*[:=]\s*'([^']+)'/i) ||
+    rest.match(/^"([^"]+)"/) ||
+    rest.match(/^'([^']+)'/);
+  if (firstM) {
+    snippet = firstM[1].trim().slice(0, 500);
+    rest = rest.replace(firstM[0], "").trim();
+  }
+
+  let notes = "";
+  const notesM = rest.match(/\bnotes?\s*[:=]\s*([\s\S]+)$/i);
+  if (notesM) {
+    notes = notesM[1].trim().slice(0, 1200);
+    rest = rest.replace(notesM[0], "").trim();
+  }
+  if (!snippet && rest) {
+    // remainder is snippet + notes
+    snippet = rest.slice(0, 500);
+    notes = notes || rest.slice(0, 800);
+  } else if (rest && !notes) {
+    notes = rest.slice(0, 1200);
+  }
+
+  return {
+    handle,
+    signal,
+    snippet: snippet || "(no first message captured)",
+    notes: notes || "",
+    raw,
+    source: "slash",
+  };
+}
+
+/**
+ * Build append-only markdown block for magic-knights/[handle]/intelligence.md
+ */
+export function formatMagicKnightEntry(record) {
+  const handle = sanitizeXHandle(record.handle);
+  const knighthood = MAGIC_KNIGHTHOOD.includes(record.knighthood)
+    ? record.knighthood
+    : "maybe";
+  const ts = record.timestamp || new Date().toISOString();
+  const signal = Math.max(0, Math.min(10, Number(record.signal) || 0));
+  const publicLabel = publicMagicKnightLabel(record);
+  const expose = knighthood === "yes";
+
+  return [
+    `---`,
+    `timestamp: ${ts}`,
+    `kind: magic-knight-intake`,
+    `handle: ${expose ? handle : "[redacted]"}`,
+    `handle_public: ${publicLabel}`,
+    `signal: ${signal}`,
+    `knighthood: ${knighthood}`,
+    `source: ${record.source || "wizard-king-x"}`,
+    `privacy: ${expose ? "public-handle-ok" : "handle-private"}`,
+    `tags: [magic-knight, x-recruit, intake, ${knighthood}]`,
+    `---`,
+    ``,
+    `## X Recruitment Intake`,
+    ``,
+    `- **Handle:** ${expose ? `@${handle}` : publicLabel + " _(handle sealed until knighthood: yes)_"}`,
+    `- **Signal level:** ${signal}/10`,
+    `- **SCROLL classification:** **${knighthood}**`,
+    record.rationale ? `- **Rationale:** ${record.rationale}` : null,
+    ``,
+    `### First message snippet`,
+    ``,
+    String(record.snippet || "").trim() || "_none_",
+    ``,
+    `### Assessment notes`,
+    ``,
+    String(record.notes || "").trim() || "_none_",
+    ``,
+  ]
+    .filter((l) => l != null)
+    .join("\n");
+}
+
+function magicKnightHeader(handle) {
+  return [
+    `# Magic Knight Candidate — Intake Log`,
+    ``,
+    `**Vault path:** \`${MAGIC_KNIGHTS_DIR}/${sanitizeXHandle(handle)}/intelligence.md\``,
+    `**Mode:** append-only · X recruitment · private until knighthood: yes`,
+    ``,
+    `> X handles are never exposed publicly without explicit **yes** classification.`,
+    ``,
+    `---`,
+    ``,
+  ].join("\n");
+}
+
+/**
+ * Write Magic Knight intake via the same vault auto-write-back loop.
+ * Path: magic-knights/[handle]/intelligence.md (append-only YAML entries)
+ */
+export async function writeMagicKnightIntake(partial, opts = {}) {
+  const handle = sanitizeXHandle(partial?.handle);
+  if (!handle || handle === "unknown") {
+    return { ok: false, reason: "handle-required" };
+  }
+
+  const signal = Math.max(0, Math.min(10, Number(partial.signal) ?? 5));
+  const snippet = String(partial.snippet || "").trim().slice(0, 500);
+  const notes = String(partial.notes || "").trim().slice(0, 1200);
+  const classified = classifyMagicKnighthood({
+    signal,
+    notes,
+    snippet,
+    handle,
+  });
+
+  const record = {
+    handle,
+    signal,
+    snippet,
+    notes,
+    knighthood: classified.knighthood,
+    rationale: classified.rationale,
+    score: classified.score,
+    source: partial.source || "wizard-king-x",
+    timestamp: new Date().toISOString(),
+    publicLabel: null,
+  };
+  record.publicLabel = publicMagicKnightLabel(record);
+
+  magicKnightMemory.set(handle.toLowerCase(), record);
+
+  const block = formatMagicKnightEntry(record);
+  const relPath = `${MAGIC_KNIGHTS_DIR}/${handle}/intelligence.md`;
+  const focusId = opts.focusId || null;
+  const root = await getVaultRoot(focusId);
+
+  if (root) {
+    try {
+      const mkRoot = await root.getDirectoryHandle(MAGIC_KNIGHTS_DIR, {
+        create: true,
+      });
+      const hDir = await mkRoot.getDirectoryHandle(handle, { create: true });
+      const fh = await hDir.getFileHandle("intelligence.md", { create: true });
+      await appendTextToFileHandle(fh, block, {
+        headerIfEmpty: magicKnightHeader(handle),
+      });
+      // SCROLL auto-curate (public-safe knighthood surface)
+      if (opts.refreshScroll !== false) {
+        scheduleScrollListCurate({ immediate: false });
+      }
+      return {
+        ok: true,
+        method: "filesystem",
+        path: relPath,
+        record,
+        knighthood: record.knighthood,
+      };
+    } catch (err) {
+      console.warn("writeMagicKnightIntake disk", err);
+      return {
+        ok: false,
+        method: "error",
+        path: relPath,
+        record,
+        error: String(err),
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    method: "memory",
+    path: relPath,
+    record,
+    knighthood: record.knighthood,
+  };
+}
+
+/** Memory snapshot of intakes (for SCROLL public-safe merge) */
+export function listMagicKnightIntakes({ publicOnly = false } = {}) {
+  const all = [...magicKnightMemory.values()];
+  if (!publicOnly) return all;
+  return all.filter((r) => r.knighthood === "yes");
+}
+
+/**
+ * Public-safe SCROLL lines for Magic Knight candidates.
+ * Handles only appear when knighthood === yes.
+ */
+export function renderMagicKnightScrollSection(intakes = null) {
+  const list = Array.isArray(intakes)
+    ? intakes
+    : listMagicKnightIntakes({ publicOnly: false });
+  if (!list.length) {
+    return [
+      `## Magic Knights (X recruitment)`,
+      ``,
+      `_No intakes yet. Wizard King: \`/mk @handle signal:7 first: "…" notes: …\`_`,
+      ``,
+    ].join("\n");
+  }
+  const lines = [
+    `## Magic Knights (X recruitment)`,
+    ``,
+    `_SCROLL classification: **yes** / **no** / **maybe**. Handles public only on **yes**._`,
+    ``,
+  ];
+  // Sort: yes first, then maybe, then no
+  const rank = { yes: 0, maybe: 1, no: 2 };
+  const sorted = [...list].sort(
+    (a, b) =>
+      (rank[a.knighthood] ?? 9) - (rank[b.knighthood] ?? 9) ||
+      (b.signal || 0) - (a.signal || 0)
+  );
+  for (const r of sorted) {
+    const label = publicMagicKnightLabel(r);
+    const path =
+      r.knighthood === "yes"
+        ? `\`${MAGIC_KNIGHTS_DIR}/${sanitizeXHandle(r.handle)}/intelligence.md\``
+        : `\`${MAGIC_KNIGHTS_DIR}/[sealed]/intelligence.md\``;
+    lines.push(
+      `- **${label}** · knighthood: **${r.knighthood}** · signal ${r.signal}/10 · ${path}`
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 /** Cell2 Core append — system substrate only */
 export async function appendCell2Intelligence(focus, opts = {}) {
   const cell2 = focus && isCell2CoreFocus(focus) ? focus : { id: CELL2_CORE_ID, name: CELL2_CORE_NAME, type: "ai", system: true, hidden: true };
@@ -1978,6 +2388,8 @@ function renderScrollListMarkdown(nodes) {
     lines.push(`_No nodes on the bus yet. Use /bus or seal a Focus._`);
     lines.push(``);
   }
+  // SCROLL auto-classifies Magic Knight X intakes (handles public only on yes)
+  lines.push(renderMagicKnightScrollSection());
   return lines.join("\n");
 }
 

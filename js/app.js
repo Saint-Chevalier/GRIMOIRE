@@ -92,13 +92,13 @@ import {
   evalSourceMatch,
   makeRoadmapCheck,
   ROADMAP_STATUSES,
-} from "./data.js?v=auto-writeback-1";
+} from "./data.js?v=x-recruit-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=auto-writeback-1";
+} from "./stars.js?v=x-recruit-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -106,7 +106,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=auto-writeback-1";
+} from "./universe.js?v=x-recruit-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -130,6 +130,10 @@ import {
   autoWriteFocusIntelligence,
   setScrollListCurateProvider,
   scheduleScrollListCurate,
+  parseMagicKnightIntake,
+  writeMagicKnightIntake,
+  publicMagicKnightLabel,
+  sanitizeXHandle,
   readCell2IntelligenceLog,
   readEntityIntelligence,
   ensureCell2IntelligenceFile,
@@ -162,12 +166,12 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=auto-writeback-1";
+} from "./intelligence.js?v=x-recruit-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=auto-writeback-1";
+} from "./health.js?v=x-recruit-1";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -4342,6 +4346,161 @@ function addBusReply(convo, text) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// X Recruitment Intake — Magic Knights (Wizard King)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function isWizardKingFocus(convo) {
+  if (!convo) return false;
+  const name = String(convo.name || "").toLowerCase().trim();
+  return name === "wizard king" || name.includes("wizard king");
+}
+
+/** Loose natural patterns when already on Wizard King focus */
+function looksLikeXRecruitLoose(text) {
+  const t = String(text || "");
+  if (/^\/(?:mk|recruit|knight)\b/i.test(t)) return true;
+  if (/\b(?:dm(?:ed|\'d)?|x\s*dm)\b/i.test(t) && /@[A-Za-z0-9_]{1,40}/.test(t)) {
+    return true;
+  }
+  if (/\bmagic\s*knight\b/i.test(t) && /@[A-Za-z0-9_]{1,40}/.test(t)) return true;
+  return false;
+}
+
+function parseLooseXRecruit(text) {
+  const t = String(text || "").trim();
+  const h = t.match(/@([A-Za-z0-9_]{1,40})/);
+  if (!h) return null;
+  const handle = sanitizeXHandle(h[1]);
+  const sigM = t.match(/\bsignal\s*[:=]?\s*(\d{1,2})\b/i);
+  const signal = sigM ? Math.min(10, Number(sigM[1])) : 5;
+  const snippet = t
+    .replace(/@[A-Za-z0-9_]{1,40}/, "")
+    .replace(/\bsignal\s*[:=]?\s*\d{1,2}\b/i, "")
+    .replace(/\b(?:dm(?:ed|\'d)?|x\s*dm|magic\s*knight)\b/gi, "")
+    .replace(/^[\s:—\-]+/, "")
+    .trim()
+    .slice(0, 500);
+  return {
+    handle,
+    signal,
+    snippet: snippet || "(intake from Wizard King field note)",
+    notes: t.slice(0, 800),
+    raw: t,
+    source: "wizard-king-loose",
+  };
+}
+
+/**
+ * Run Magic Knight intake: vault write under magic-knights/[handle]/ +
+ * densen Wizard King focus + SCROLL classification (yes/no/maybe).
+ * Public chat never shows raw @handle unless knighthood === yes.
+ */
+async function handleMagicKnightIntake(convo, intake, rawText) {
+  if (!convo || !intake?.handle) return;
+
+  const result = await writeMagicKnightIntake(intake, {
+    focusId: convo.id,
+    refreshScroll: true,
+  });
+  const record = result?.record || intake;
+  const knighthood = record.knighthood || "maybe";
+  const publicLabel = publicMagicKnightLabel(record);
+  const expose = knighthood === "yes";
+  const handleDisplay = expose
+    ? `@${sanitizeXHandle(record.handle)}`
+    : publicLabel;
+
+  // Densen onto Wizard King (or active) focus via auto-write-back loop
+  // Privacy: sealed handle when not yes
+  const focusBody = [
+    `**X Recruitment Intake** · Magic Knight`,
+    `Public label: **${handleDisplay}**`,
+    expose ? `Handle: @${sanitizeXHandle(record.handle)}` : `Handle: _sealed (knighthood ≠ yes)_`,
+    `Signal: **${record.signal}/10**`,
+    `SCROLL classification: **${knighthood}**`,
+    record.rationale ? `Rationale: ${record.rationale}` : null,
+    ``,
+    `### First message snippet`,
+    record.snippet || "_none_",
+    ``,
+    `### Assessment notes`,
+    record.notes || "_none_",
+    ``,
+    `Vault: \`magic-knights/${expose ? sanitizeXHandle(record.handle) : "[sealed]"}/intelligence.md\``,
+  ]
+    .filter((l) => l != null)
+    .join("\n");
+
+  void queueAutoWriteBack(convo, {
+    eventType: "X_RECRUIT_INTAKE",
+    body: focusBody,
+    source: "Grimoire",
+    category: "relationship",
+    tags: ["magic-knight", "x-recruit", knighthood, "auto-write"],
+    refreshScrollImmediate: true,
+    silentToast: true,
+  });
+
+  // Force SCROLL rewrite so knighthood section is current
+  try {
+    await updateScrollListIndex(state.conversations, state.spells);
+  } catch {
+    /* non-fatal */
+  }
+
+  const method = result?.method || "memory";
+  if (method === "filesystem" && result?.ok !== false) {
+    toastVaultWritten("magic-knights");
+  } else if (method === "memory") {
+    toast("Intake densened (memory) — link 📁 for disk", "");
+  } else if (result?.ok === false) {
+    toast("Magic Knight vault write failed", "");
+  }
+
+  const reply = [
+    `### Magic Knight intake · SCROLL`,
+    ``,
+    `**Candidate:** ${handleDisplay}`,
+    `**Signal:** ${record.signal}/10`,
+    `**SCROLL classification:** **${knighthood}**`,
+    record.rationale ? `_${record.rationale}_` : null,
+    ``,
+    `**First message:** ${(record.snippet || "").slice(0, 200)}`,
+    record.notes ? `**Notes:** ${String(record.notes).slice(0, 200)}` : null,
+    ``,
+    method === "filesystem"
+      ? `Vault written → \`${result.path}\` (append-only)`
+      : method === "memory"
+        ? `Stored in memory — link vault folder for \`magic-knights/[handle]/intelligence.md\``
+        : `Write issue: ${result?.error || "unknown"}`,
+    ``,
+    knighthood === "yes"
+      ? `_Handle is public-safe (classification: yes)._`
+      : `_X handle sealed from public SCROLL until classification is **yes**._`,
+    ``,
+    `_Intake again: \`/mk @handle signal:7 first: "…" notes: …\`_`,
+  ]
+    .filter((l) => l != null)
+    .join("\n");
+
+  convo.messages = convo.messages || [];
+  convo.messages.push({
+    id: uid("msg"),
+    role: "grimoire",
+    text: reply,
+    ts: Date.now(),
+    kind: "mk-intake-ack",
+  });
+  touchFocus(convo);
+  persist();
+  renderChat();
+  renderConvoList();
+  activityPing(
+    `✦ Magic Knight · ${publicLabel} · ${knighthood} · ${method}`
+  );
+}
+
 async function handleBusRoute(convo, cmd) {
   const { nodes } = await readScrollListNodes(state.conversations);
   // Prefer multi-word resolution when rest provided
@@ -4633,6 +4792,25 @@ function sendMessage(text) {
     void teachSpellGlyph(targetSpell, convo, body, { scope: "spell" }).then(() => {
       void renderSpells();
     });
+    return;
+  }
+
+  // === X Recruitment Intake (Wizard King → Magic Knights) ===
+  // /mk @handle · /recruit (any focus) · natural DM patterns · loose forms on Wizard King
+  const mkIntake =
+    parseMagicKnightIntake(userText) ||
+    (isWizardKingFocus(convo) && looksLikeXRecruitLoose(userText)
+      ? parseLooseXRecruit(userText)
+      : null);
+  if (mkIntake) {
+    convo.messages.push({
+      id: uid("msg"),
+      role: "user",
+      text: userText,
+      ts: Date.now(),
+      kind: "mk-intake",
+    });
+    void handleMagicKnightIntake(convo, mkIntake, userText);
     return;
   }
 
