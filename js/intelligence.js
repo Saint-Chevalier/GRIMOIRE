@@ -776,6 +776,11 @@ export function seedCell2DoctrineEntries() {
 const GLYPH_DIR = "grimoire-local";
 const GLYPH_SUB = "glyphs";
 
+// ── Roadmaps — structured build plans (append-only iterations) ──
+const ROADMAP_SUB = "roadmaps";
+/** @type {Map<string, string>} slug → last written markdown (memory fallback) */
+const roadmapMemory = new Map();
+
 export function slugifyGlyph(text) {
   return (
     String(text || "glyph")
@@ -914,6 +919,204 @@ export async function writeSpellGlyph(focus, spell, { body, title, scope = "spel
   }
 
   return { ok: true, glyph, method, path: relPath };
+}
+
+/**
+ * Ensure grimoire-local/roadmaps/ under vault root (global or per-focus).
+ * Path: GRIMOIRE-FocusIntelligence/grimoire-local/roadmaps/[slug].md
+ */
+async function ensureRoadmapsDirectory(focusId = null) {
+  const root = await getVaultRoot(focusId);
+  if (!root) return null;
+  try {
+    const local = await root.getDirectoryHandle(GLYPH_DIR, { create: true });
+    const roadmaps = await local.getDirectoryHandle(ROADMAP_SUB, { create: true });
+    return roadmaps;
+  } catch (err) {
+    console.warn("ensureRoadmapsDirectory", err);
+    return null;
+  }
+}
+
+export function roadmapRelativePath(slug) {
+  const s = String(slug || "roadmap")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "roadmap";
+  return `${GLYPH_DIR}/${ROADMAP_SUB}/${s}.md`;
+}
+
+/**
+ * Persist a roadmap markdown file.
+ * Full structured body is rewritten from complete in-memory roadmap (safe).
+ * Iteration history lives inside that body and is never dropped.
+ * When opts.appendOnlyBlock is set, also append a raw block if file already exists
+ * and content would otherwise risk losing external hand-edits.
+ */
+export async function writeRoadmapFile(roadmap, markdown, opts = {}) {
+  const slug = String(roadmap?.slug || opts.slug || "roadmap").trim();
+  if (!slug) return { ok: false, reason: "no-slug" };
+  const content = String(markdown || "").trimEnd() + "\n";
+  const fileName = `${slug.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 64)}.md`;
+  const relPath = roadmapRelativePath(slug);
+  const focusId = opts.focusId || null;
+
+  // Memory always
+  roadmapMemory.set(slug, content);
+
+  let method = "memory";
+  try {
+    const dir = await ensureRoadmapsDirectory(focusId);
+    if (dir) {
+      const fh = await dir.getFileHandle(fileName, { create: true });
+      let existing = "";
+      try {
+        const file = await fh.getFile();
+        existing = await file.text();
+      } catch {
+        existing = "";
+      }
+      // Skip identical writes
+      if (existing === content) {
+        return { ok: true, method: "filesystem", path: relPath, skipped: true };
+      }
+      // Preserve any operator hand-notes after our marker if they diverge
+      let toWrite = content;
+      if (
+        existing &&
+        opts.preserveTail !== false &&
+        existing.includes("## Operator notes (hand)")
+      ) {
+        const tail = existing.split("## Operator notes (hand)")[1] || "";
+        if (tail && !content.includes("## Operator notes (hand)")) {
+          toWrite =
+            content.replace(/\s*$/, "") +
+            "\n\n## Operator notes (hand)" +
+            tail;
+        }
+      }
+      const w = await fh.createWritable();
+      await w.write(toWrite);
+      await w.close();
+      method = "filesystem";
+      roadmapMemory.set(slug, toWrite);
+      return { ok: true, method, path: relPath, fileName };
+    }
+  } catch (err) {
+    console.warn("writeRoadmapFile disk", err);
+  }
+
+  // Download fallback only when explicitly allowed and no FS
+  if (opts.allowDownload === true && !hasDirectoryPicker()) {
+    try {
+      downloadMarkdown(fileName, content);
+      return { ok: true, method: "download", path: relPath, fileName };
+    } catch (err) {
+      console.warn("writeRoadmapFile download", err);
+    }
+  }
+
+  return { ok: true, method, path: relPath, fileName };
+}
+
+/**
+ * Append a single iteration block to an existing roadmap file without
+ * rebuilding the whole document (true append for expand ops).
+ */
+export async function appendRoadmapIteration(slug, block, opts = {}) {
+  const s = String(slug || "").trim();
+  if (!s) return { ok: false, reason: "no-slug" };
+  const chunk = String(block || "").trim();
+  if (!chunk) return { ok: false, reason: "empty" };
+  const fileName = `${s.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 64)}.md`;
+  const relPath = roadmapRelativePath(s);
+  const focusId = opts.focusId || null;
+  const appendBlock = `\n### [${new Date().toISOString()}] ${chunk}\n`;
+
+  const prevMem = roadmapMemory.get(s) || "";
+  roadmapMemory.set(s, (prevMem || "").replace(/\s*$/, "") + appendBlock);
+
+  try {
+    const dir = await ensureRoadmapsDirectory(focusId);
+    if (dir) {
+      const fh = await dir.getFileHandle(fileName, { create: true });
+      let existing = "";
+      try {
+        const file = await fh.getFile();
+        existing = await file.text();
+      } catch {
+        existing = "";
+      }
+      if (!existing.trim()) {
+        existing =
+          `# Roadmap: ${s}\n\n## Iterations (append-only)\n\n_Seeded by append._\n`;
+      }
+      const next = existing.replace(/\s*$/, "") + appendBlock;
+      const w = await fh.createWritable();
+      await w.write(next);
+      await w.close();
+      roadmapMemory.set(s, next);
+      return { ok: true, method: "filesystem", path: relPath };
+    }
+  } catch (err) {
+    console.warn("appendRoadmapIteration", err);
+  }
+  return { ok: true, method: "memory", path: relPath };
+}
+
+/** Read roadmap markdown from disk or memory */
+export async function readRoadmapFile(slug, opts = {}) {
+  const s = String(slug || "").trim();
+  if (!s) return { ok: false, content: null };
+  const fileName = `${s.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 64)}.md`;
+  const relPath = roadmapRelativePath(s);
+  const focusId = opts.focusId || null;
+  try {
+    const dir = await ensureRoadmapsDirectory(focusId);
+    if (dir) {
+      try {
+        const fh = await dir.getFileHandle(fileName, { create: false });
+        const file = await fh.getFile();
+        const content = await file.text();
+        roadmapMemory.set(s, content);
+        return { ok: true, method: "filesystem", path: relPath, content };
+      } catch {
+        /* missing on disk */
+      }
+    }
+  } catch (err) {
+    console.warn("readRoadmapFile", err);
+  }
+  if (roadmapMemory.has(s)) {
+    return {
+      ok: true,
+      method: "memory",
+      path: relPath,
+      content: roadmapMemory.get(s),
+    };
+  }
+  return { ok: false, method: "none", path: relPath, content: null };
+}
+
+/** List roadmap files from vault (names only) + memory keys */
+export async function listRoadmapFiles(opts = {}) {
+  const names = new Set();
+  for (const k of roadmapMemory.keys()) names.add(k);
+  const focusId = opts.focusId || null;
+  try {
+    const dir = await ensureRoadmapsDirectory(focusId);
+    if (dir) {
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind === "file" && /\.md$/i.test(name)) {
+          names.add(name.replace(/\.md$/i, ""));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("listRoadmapFiles", err);
+  }
+  return [...names].sort();
 }
 
 /**

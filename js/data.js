@@ -2016,6 +2016,7 @@ export function loadState() {
         }
         ensureScrollFocus(parsed);
         ensureCell2CoreFocus(parsed);
+        ensureRoadmapsState(parsed);
         return parsed;
       }
     }
@@ -2032,9 +2033,12 @@ export function loadState() {
     spellsOpen: true,
     spellView: "active",
     focusFolders: structuredClone(DEFAULT_FOCUS_FOLDERS),
+    roadmaps: [],
+    activeRoadmapSlug: null,
   };
   ensureScrollFocus(fresh);
   ensureCell2CoreFocus(fresh);
+  ensureRoadmapsState(fresh);
   return fresh;
 }
 
@@ -2612,11 +2616,880 @@ export function saveState(state) {
         focusFolders: Array.isArray(state.focusFolders)
           ? state.focusFolders
           : structuredClone(DEFAULT_FOCUS_FOLDERS),
+        roadmaps: Array.isArray(state.roadmaps) ? state.roadmaps : [],
+        activeRoadmapSlug:
+          typeof state.activeRoadmapSlug === "string"
+            ? state.activeRoadmapSlug
+            : null,
       })
     );
   } catch {
     /* quota / private mode */
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Roadmap Engine — structured build plans from plain language or SCROLL paste
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Canonical app file targets the roadmap engine plans against */
+export const ROADMAP_FILE_TARGETS = Object.freeze([
+  "js/app.js",
+  "js/data.js",
+  "js/intelligence.js",
+  "index.html",
+  "css/styles.css",
+]);
+
+/** Lifecycle statuses for roadmaps and steps */
+export const ROADMAP_STATUSES = Object.freeze([
+  "pending",
+  "in-progress",
+  "complete",
+  "blocked",
+]);
+
+export function normalizeRoadmapStatus(s) {
+  const v = String(s || "pending")
+    .toLowerCase()
+    .trim()
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-");
+  if (v === "inprogress" || v === "wip" || v === "active" || v === "doing") {
+    return "in-progress";
+  }
+  if (v === "done" || v === "completed" || v === "finished") return "complete";
+  if (v === "block" || v === "stuck" || v === "waiting") return "blocked";
+  if (ROADMAP_STATUSES.includes(v)) return v;
+  return "pending";
+}
+
+export function slugifyRoadmap(text) {
+  return (
+    String(text || "roadmap")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64) || "roadmap"
+  );
+}
+
+function uidRoadmap(prefix = "rm") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 7)}`;
+}
+
+/**
+ * Parse /roadmap slash commands.
+ * @returns {null | { op: string, ... }}
+ */
+export function parseRoadmapCommand(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  // Bare /roadmap or with args
+  const m = raw.match(/^\/roadmap(?:\s+([\s\S]*))?$/i);
+  if (!m) {
+    // Natural iteration phrases (when active roadmap context is implied by caller)
+    const expandNat = raw.match(
+      /^expand\s+step\s+(\d+)\s*[:\-]?\s*([\s\S]*)$/i
+    );
+    if (expandNat) {
+      return {
+        op: "expand",
+        step: Number(expandNat[1]),
+        detail: String(expandNat[2] || "").trim(),
+        raw,
+      };
+    }
+    return null;
+  }
+
+  const rest = String(m[1] || "").trim();
+  if (!rest || /^(help|\?)$/i.test(rest)) {
+    return { op: "help", raw };
+  }
+  if (/^list$/i.test(rest)) return { op: "list", raw };
+  if (/^open$/i.test(rest)) return { op: "open", raw };
+
+  const show = rest.match(/^show(?:\s+(\S+))?$/i);
+  if (show) return { op: "show", slug: show[1] || null, raw };
+
+  const expand = rest.match(
+    /^expand\s+step\s+(\d+)\s*[:\-]?\s*([\s\S]*)$/i
+  );
+  if (expand) {
+    return {
+      op: "expand",
+      step: Number(expand[1]),
+      detail: String(expand[2] || "").trim(),
+      raw,
+    };
+  }
+
+  const stepStatus = rest.match(
+    /^step\s+(\d+)\s+(pending|in-progress|in_progress|complete|done|blocked|wip|active)$/i
+  );
+  if (stepStatus) {
+    return {
+      op: "step_status",
+      step: Number(stepStatus[1]),
+      status: normalizeRoadmapStatus(stepStatus[2]),
+      raw,
+    };
+  }
+
+  const status = rest.match(
+    /^status(?:\s+(\S+))?\s+(pending|in-progress|in_progress|complete|done|blocked|wip|active)$/i
+  );
+  if (status) {
+    return {
+      op: "status",
+      slug: status[1] || null,
+      status: normalizeRoadmapStatus(status[2]),
+      raw,
+    };
+  }
+
+  // Structured SCROLL / markdown paste after /roadmap
+  if (looksLikeScrollRoadmap(rest)) {
+    return { op: "parse", text: rest, raw };
+  }
+
+  // Default: plain-language feature description → generate plan
+  return { op: "create", text: rest, raw };
+}
+
+/** Heuristic: text is already a structured roadmap (SCROLL paste) */
+export function looksLikeScrollRoadmap(text) {
+  const t = String(text || "");
+  if (t.length < 40) return false;
+  const hasPhase = /^#{1,3}\s*phase\b/im.test(t) || /\bphase\s+\d+/i.test(t);
+  const hasStep = /^#{1,4}\s*step\b/im.test(t) || /\bstep\s+\d+/i.test(t);
+  const hasFiles =
+    /\b(js\/app\.js|js\/data\.js|js\/intelligence\.js|index\.html|css\/styles\.css)\b/i.test(
+      t
+    ) || /^files?\s*:/im.test(t);
+  const hasRoadmapHeader = /^#\s*roadmap\b/im.test(t) || /^title\s*:/im.test(t);
+  return (hasPhase && (hasStep || hasFiles)) || (hasRoadmapHeader && hasPhase);
+}
+
+/**
+ * Detect which canonical file targets are mentioned in free text.
+ */
+export function detectRoadmapFileTargets(text) {
+  const t = String(text || "").toLowerCase();
+  const found = [];
+  for (const f of ROADMAP_FILE_TARGETS) {
+    const base = f.split("/").pop();
+    if (
+      t.includes(f.toLowerCase()) ||
+      t.includes(base.toLowerCase()) ||
+      (base === "app.js" && /\bapp\.js\b/.test(t)) ||
+      (base === "data.js" && /\bdata\.js\b/.test(t)) ||
+      (base === "intelligence.js" && /\bintelligence\.js\b/.test(t)) ||
+      (base === "index.html" && /\bindex\.html\b/.test(t)) ||
+      (base === "styles.css" && /\b(styles\.css|css)\b/.test(t))
+    ) {
+      found.push(f);
+    }
+  }
+  // Domain hints when no files named explicitly
+  if (!found.length) {
+    if (/\b(ui|panel|button|modal|dialog|css|style|layout)\b/i.test(t)) {
+      found.push("index.html", "css/styles.css", "js/app.js");
+    }
+    if (/\b(parse|schema|state|localstorage|seed|command)\b/i.test(t)) {
+      found.push("js/data.js");
+    }
+    if (/\b(vault|folder|filesystem|disk|persist|markdown|write)\b/i.test(t)) {
+      found.push("js/intelligence.js");
+    }
+    if (/\b(chat|render|wire|handler|event)\b/i.test(t)) {
+      found.push("js/app.js");
+    }
+  }
+  if (!found.length) {
+    return [...ROADMAP_FILE_TARGETS];
+  }
+  // Stable unique order matching ROADMAP_FILE_TARGETS
+  return ROADMAP_FILE_TARGETS.filter((f) => found.includes(f));
+}
+
+function extractRoadmapTitle(text) {
+  const t = String(text || "").trim();
+  if (!t) return "Untitled roadmap";
+  const fm = t.match(/^title\s*:\s*(.+)$/im);
+  if (fm) return fm[1].trim().slice(0, 100);
+  const h1 = t.match(/^#\s+(?:roadmap\s*[:—-]?\s*)?(.+)$/im);
+  if (h1) return h1[1].trim().slice(0, 100);
+  // "Build X" / "Add X" / "Implement X"
+  const intent = t.match(
+    /^(?:build|add|implement|create|ship|forge|upgrade|wire)\s+(.+)$/im
+  );
+  if (intent) {
+    return intent[1]
+      .replace(/[.!?].*$/, "")
+      .trim()
+      .slice(0, 100);
+  }
+  const first = t.split(/\n/)[0].replace(/^#+\s*/, "").trim();
+  return first.slice(0, 100) || "Untitled roadmap";
+}
+
+/**
+ * Generate a structured roadmap from plain-language feature description.
+ */
+export function generateRoadmapFromDescription(text, opts = {}) {
+  const description = String(text || "").trim();
+  const title = String(opts.title || extractRoadmapTitle(description)).slice(
+    0,
+    100
+  );
+  const slugBase = slugifyRoadmap(opts.slug || title);
+  const files = detectRoadmapFileTargets(description);
+  const now = new Date().toISOString();
+
+  const phases = [
+    {
+      id: "p1",
+      title: "Phase 1 — Scaffold",
+      status: "pending",
+      dependsOn: [],
+      steps: [
+        {
+          id: "s1",
+          n: 1,
+          title: "Define schema and constants",
+          detail: `Lock data shapes, status enums, and file-target list for **${title}**.`,
+          files: files.filter((f) => f === "js/data.js").length
+            ? ["js/data.js"]
+            : files.slice(0, 2),
+          status: "pending",
+          acceptance: [
+            "Schema exported and importable",
+            "Status set is pending | in-progress | complete | blocked",
+            "No changes to vault covenant / spell system / bus / path gate unless required",
+          ],
+          expansions: [],
+        },
+        {
+          id: "s2",
+          n: 2,
+          title: "Persistence path",
+          detail:
+            "Wire append-only markdown store under grimoire-local/roadmaps/[slug].md",
+          files: files.includes("js/intelligence.js")
+            ? ["js/intelligence.js"]
+            : ["js/intelligence.js", "js/data.js"],
+          status: "pending",
+          acceptance: [
+            "Directory grimoire-local/roadmaps/ created under vault root",
+            "Write succeeds when vault linked; memory fallback when not",
+            "Existing roadmap never truncated on expand",
+          ],
+          expansions: [],
+        },
+      ],
+    },
+    {
+      id: "p2",
+      title: "Phase 2 — Implement core",
+      status: "pending",
+      dependsOn: ["p1"],
+      steps: [
+        {
+          id: "s3",
+          n: 3,
+          title: "Parse + generate plan",
+          detail: `Turn operator description (and SCROLL paste) into phases, file targets, ordered steps, and acceptance tests for: ${description.slice(0, 200)}`,
+          files: files.includes("js/data.js")
+            ? ["js/data.js", "js/app.js"].filter((f, i, a) => a.indexOf(f) === i)
+            : files.slice(0, 3),
+          status: "pending",
+          acceptance: [
+            "Plain language yields ≥1 phase and ≥2 steps",
+            "SCROLL-shaped markdown parses without data loss of steps",
+            "File targets restricted to known app surfaces when possible",
+          ],
+          expansions: [],
+        },
+        {
+          id: "s4",
+          n: 4,
+          title: "Command + iteration surface",
+          detail:
+            'Expose /roadmap create, list, show, status, step status, and "expand step N" without overwriting prior plan body.',
+          files: files.includes("js/app.js")
+            ? ["js/app.js", "js/data.js"]
+            : ["js/app.js"],
+          status: "pending",
+          acceptance: [
+            "/roadmap help documents all ops",
+            "expand step N appends iteration history",
+            "status transitions only use canonical set",
+          ],
+          expansions: [],
+        },
+      ],
+    },
+    {
+      id: "p3",
+      title: "Phase 3 — UI + verification",
+      status: "pending",
+      dependsOn: ["p2"],
+      steps: [
+        {
+          id: "s5",
+          n: 5,
+          title: "Operator UI",
+          detail: `Roadmap panel reachable from App Settings for **${title}** — list, detail, status chips.`,
+          files: ["index.html", "css/styles.css", "js/app.js"].filter((f) =>
+            files.includes(f) || true
+          ),
+          status: "pending",
+          acceptance: [
+            "Panel opens from settings Roadmap card and /roadmap open",
+            "Statuses render as pending / in-progress / complete / blocked",
+            "Active roadmap visible without leaving Focus workspace permanently",
+          ],
+          expansions: [],
+        },
+        {
+          id: "s6",
+          n: 6,
+          title: "Acceptance pass",
+          detail: `Verify end-to-end plan for: ${title}`,
+          files,
+          status: "pending",
+          acceptance: [
+            "Create → list → show round-trip works",
+            "Disk path grimoire-local/roadmaps/<slug>.md written when vault linked",
+            "No regression to vault covenant, spell system, bus routing, or path gate",
+          ],
+          expansions: [],
+        },
+      ],
+    },
+  ];
+
+  // Renumber steps globally
+  let n = 0;
+  for (const ph of phases) {
+    for (const st of ph.steps) {
+      n += 1;
+      st.n = n;
+    }
+  }
+
+  const allFiles = [
+    ...new Set(phases.flatMap((p) => p.steps.flatMap((s) => s.files || []))),
+  ];
+
+  return {
+    id: uidRoadmap("rm"),
+    slug: slugBase,
+    title,
+    status: "pending",
+    source: opts.source || "plain",
+    description,
+    createdAt: now,
+    updatedAt: now,
+    phases,
+    fileTargets: allFiles.length ? allFiles : files,
+    iterations: [],
+    path: `grimoire-local/roadmaps/${slugBase}.md`,
+  };
+}
+
+/**
+ * Parse SCROLL-generated or operator-pasted roadmap markdown into structured form.
+ */
+export function parseScrollRoadmap(markdown, opts = {}) {
+  const text = String(markdown || "").trim();
+  if (!text) return null;
+
+  // If it doesn't look structured, fall through to generator
+  if (!looksLikeScrollRoadmap(text) && !opts.force) {
+    return generateRoadmapFromDescription(text, {
+      ...opts,
+      source: opts.source || "plain",
+    });
+  }
+
+  const title = extractRoadmapTitle(text);
+  const slug = slugifyRoadmap(opts.slug || title);
+  const now = new Date().toISOString();
+  const statusMatch = text.match(/^status\s*:\s*(\S+)/im);
+  const overallStatus = normalizeRoadmapStatus(
+    statusMatch ? statusMatch[1] : "pending"
+  );
+
+  const phases = [];
+  // Split on ## Phase / ### Phase
+  const phaseChunks = text.split(
+    /(?=^#{1,3}\s*phase\b)/im
+  );
+  let stepCounter = 0;
+
+  for (const chunk of phaseChunks) {
+    const phTitleM = chunk.match(/^#{1,3}\s*(phase\s*\d*\s*[:—\-]?\s*.+)$/im);
+    if (!phTitleM && phases.length === 0 && !/^#{1,3}\s*phase\b/im.test(chunk)) {
+      continue;
+    }
+    if (!phTitleM) continue;
+
+    const phTitle = phTitleM[1].trim();
+    const depM = chunk.match(/depends?\s*(?:on)?\s*:\s*([^\n]+)/i);
+    const dependsOn = depM
+      ? depM[1]
+          .split(/[,;]/)
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .map((x) => {
+            const num = x.match(/phase\s*(\d+)/i);
+            return num ? `p${num[1]}` : slugifyRoadmap(x).slice(0, 12);
+          })
+      : [];
+
+    const phStatusM = chunk.match(
+      /(?:^|\n)\s*status\s*:\s*(pending|in-progress|complete|blocked|done|wip)/i
+    );
+    const phaseId = `p${phases.length + 1}`;
+    if (phases.length === 0 && dependsOn.length === 0) {
+      /* first phase has no deps */
+    } else if (dependsOn.length === 0 && phases.length > 0) {
+      dependsOn.push(phases[phases.length - 1].id);
+    }
+
+    const steps = [];
+    const stepParts = chunk.split(/(?=^#{2,4}\s*step\b|^\s*[-*]\s*step\s+\d+)/im);
+    for (const sp of stepParts) {
+      const stTitleM =
+        sp.match(/^#{2,4}\s*step\s*(\d+)?\s*[:—\-]?\s*(.+)$/im) ||
+        sp.match(/^\s*[-*]\s*step\s*(\d+)?\s*[:—\-]?\s*(.+)$/im);
+      if (!stTitleM) continue;
+      stepCounter += 1;
+      const n = stTitleM[1] ? Number(stTitleM[1]) : stepCounter;
+      const stTitle = String(stTitleM[2] || `Step ${n}`)
+        .trim()
+        .slice(0, 160);
+
+      const filesLine = sp.match(/files?\s*:\s*([^\n]+)/i);
+      let stepFiles = filesLine
+        ? filesLine[1]
+            .split(/[,;|]/)
+            .map((x) => x.trim().replace(/^[`']+|[`']+$/g, ""))
+            .filter(Boolean)
+        : detectRoadmapFileTargets(sp);
+      // Normalize to known targets when possible
+      stepFiles = stepFiles.map((f) => {
+        const hit = ROADMAP_FILE_TARGETS.find(
+          (k) =>
+            k === f ||
+            k.endsWith(f) ||
+            f.endsWith(k.split("/").pop())
+        );
+        return hit || f;
+      });
+
+      const accBlock = sp.match(
+        /acceptance(?:\s*tests?)?\s*:\s*([\s\S]*?)(?=\n#{1,4}\s|\nfiles?\s*:|\nstatus\s*:|$)/i
+      );
+      let acceptance = [];
+      if (accBlock) {
+        acceptance = accBlock[1]
+          .split(/\n/)
+          .map((l) => l.replace(/^\s*[-*\[\] x]+\s*/i, "").trim())
+          .filter((l) => l && !/^acceptance/i.test(l));
+      }
+      if (!acceptance.length) {
+        acceptance = [`Step ${n} behaves as described`, "No regression outside named files"];
+      }
+
+      const stStatusM = sp.match(
+        /status\s*:\s*(pending|in-progress|complete|blocked|done|wip)/i
+      );
+      const detailLines = sp
+        .split(/\n/)
+        .slice(1)
+        .filter(
+          (l) =>
+            !/^(files?|acceptance|status|depends?)\s*:/i.test(l.trim()) &&
+            !/^#{1,4}\s/.test(l.trim())
+        )
+        .join("\n")
+        .trim()
+        .slice(0, 800);
+
+      steps.push({
+        id: `s${stepCounter}`,
+        n,
+        title: stTitle,
+        detail: detailLines || stTitle,
+        files: stepFiles.length ? stepFiles : [...ROADMAP_FILE_TARGETS],
+        status: normalizeRoadmapStatus(stStatusM ? stStatusM[1] : "pending"),
+        acceptance,
+        expansions: [],
+      });
+    }
+
+    // If phase had no explicit steps, synthesize one from phase body
+    if (!steps.length) {
+      stepCounter += 1;
+      const body = chunk
+        .replace(phTitleM[0], "")
+        .trim()
+        .slice(0, 400);
+      steps.push({
+        id: `s${stepCounter}`,
+        n: stepCounter,
+        title: phTitle.replace(/^phase\s*\d*\s*[:—\-]?\s*/i, "") || phTitle,
+        detail: body || phTitle,
+        files: detectRoadmapFileTargets(chunk),
+        status: "pending",
+        acceptance: [`${phTitle} complete`, "Named file targets touched only as listed"],
+        expansions: [],
+      });
+    }
+
+    phases.push({
+      id: phaseId,
+      title: phTitle,
+      status: normalizeRoadmapStatus(phStatusM ? phStatusM[1] : "pending"),
+      dependsOn,
+      steps,
+    });
+  }
+
+  if (!phases.length) {
+    return generateRoadmapFromDescription(text, {
+      title,
+      slug,
+      source: "scroll",
+    });
+  }
+
+  const fileTargets = [
+    ...new Set(phases.flatMap((p) => p.steps.flatMap((s) => s.files || []))),
+  ];
+
+  return {
+    id: uidRoadmap("rm"),
+    slug,
+    title,
+    status: overallStatus,
+    source: opts.source || "scroll",
+    description: text.slice(0, 2000),
+    createdAt: now,
+    updatedAt: now,
+    phases,
+    fileTargets: fileTargets.length ? fileTargets : [...ROADMAP_FILE_TARGETS],
+    iterations: [],
+    path: `grimoire-local/roadmaps/${slug}.md`,
+  };
+}
+
+/** Flatten steps in execution order (respecting phase order) */
+export function flattenRoadmapSteps(roadmap) {
+  const out = [];
+  for (const ph of roadmap?.phases || []) {
+    for (const st of ph.steps || []) {
+      out.push({ ...st, phaseId: ph.id, phaseTitle: ph.title });
+    }
+  }
+  out.sort((a, b) => (a.n || 0) - (b.n || 0));
+  return out;
+}
+
+export function findRoadmapStep(roadmap, stepN) {
+  const n = Number(stepN);
+  if (!roadmap || !n) return null;
+  for (const ph of roadmap.phases || []) {
+    for (const st of ph.steps || []) {
+      if (Number(st.n) === n) return { step: st, phase: ph };
+    }
+  }
+  return null;
+}
+
+/**
+ * Expand a step in-place (append expansion; never wipe prior detail).
+ */
+export function expandRoadmapStep(roadmap, stepN, detail) {
+  if (!roadmap) return null;
+  const found = findRoadmapStep(roadmap, stepN);
+  if (!found) return null;
+  const text = String(detail || "").trim();
+  const entry = {
+    at: new Date().toISOString(),
+    detail:
+      text ||
+      `Expanded step ${stepN}: break into sub-tasks, name edge cases, tighten acceptance.`,
+  };
+  if (!Array.isArray(found.step.expansions)) found.step.expansions = [];
+  found.step.expansions.push(entry);
+  if (text) {
+    found.step.detail = `${String(found.step.detail || "").trim()}\n\n**Expand:** ${text}`.trim();
+  } else {
+    // Auto-expand: add concrete sub-acceptance if thin
+    const extra = [
+      `Sub-check: unit path for step ${stepN} exercised in browser`,
+      `Sub-check: rollback/undo path documented if mutable`,
+      `Sub-check: files ${ (found.step.files || []).join(", ") || "(none)" } only`,
+    ];
+    found.step.acceptance = [
+      ...(found.step.acceptance || []),
+      ...extra.filter((a) => !(found.step.acceptance || []).includes(a)),
+    ];
+    found.step.detail = `${String(found.step.detail || "").trim()}\n\n**Expand:** deeper acceptance + file-scope lock.`.trim();
+  }
+  if (!Array.isArray(roadmap.iterations)) roadmap.iterations = [];
+  roadmap.iterations.push({
+    at: entry.at,
+    kind: "expand",
+    step: Number(stepN),
+    detail: entry.detail,
+  });
+  roadmap.updatedAt = entry.at;
+  if (roadmap.status === "pending") roadmap.status = "in-progress";
+  return roadmap;
+}
+
+export function setRoadmapStepStatus(roadmap, stepN, status) {
+  if (!roadmap) return null;
+  const found = findRoadmapStep(roadmap, stepN);
+  if (!found) return null;
+  const next = normalizeRoadmapStatus(status);
+  found.step.status = next;
+  const at = new Date().toISOString();
+  if (!Array.isArray(roadmap.iterations)) roadmap.iterations = [];
+  roadmap.iterations.push({
+    at,
+    kind: "step_status",
+    step: Number(stepN),
+    status: next,
+  });
+  // Roll phase status
+  const steps = found.phase.steps || [];
+  if (steps.every((s) => s.status === "complete")) found.phase.status = "complete";
+  else if (steps.some((s) => s.status === "blocked")) found.phase.status = "blocked";
+  else if (steps.some((s) => s.status === "in-progress" || s.status === "complete")) {
+    found.phase.status = "in-progress";
+  }
+  // Roll overall
+  const all = flattenRoadmapSteps(roadmap);
+  if (all.every((s) => s.status === "complete")) roadmap.status = "complete";
+  else if (all.some((s) => s.status === "blocked")) {
+    if (roadmap.status !== "blocked") roadmap.status = "blocked";
+  } else if (all.some((s) => s.status === "in-progress" || s.status === "complete")) {
+    if (roadmap.status === "pending") roadmap.status = "in-progress";
+  }
+  roadmap.updatedAt = at;
+  return roadmap;
+}
+
+export function setRoadmapStatus(roadmap, status) {
+  if (!roadmap) return null;
+  const next = normalizeRoadmapStatus(status);
+  roadmap.status = next;
+  const at = new Date().toISOString();
+  if (!Array.isArray(roadmap.iterations)) roadmap.iterations = [];
+  roadmap.iterations.push({ at, kind: "status", status: next });
+  roadmap.updatedAt = at;
+  return roadmap;
+}
+
+/**
+ * Format roadmap as markdown for vault persistence + display.
+ */
+export function formatRoadmapMarkdown(roadmap) {
+  if (!roadmap) return "";
+  const lines = [];
+  lines.push(`# Roadmap: ${roadmap.title || roadmap.slug}`);
+  lines.push("");
+  lines.push("```yaml");
+  lines.push(`slug: ${roadmap.slug}`);
+  lines.push(`id: ${roadmap.id}`);
+  lines.push(`status: ${roadmap.status || "pending"}`);
+  lines.push(`source: ${roadmap.source || "plain"}`);
+  lines.push(`createdAt: ${roadmap.createdAt || ""}`);
+  lines.push(`updatedAt: ${roadmap.updatedAt || ""}`);
+  lines.push(`path: grimoire-local/roadmaps/${roadmap.slug}.md`);
+  lines.push(
+    `files: [${(roadmap.fileTargets || []).map((f) => `"${f}"`).join(", ")}]`
+  );
+  lines.push("```");
+  lines.push("");
+  if (roadmap.description) {
+    lines.push("## Intent");
+    lines.push("");
+    lines.push(String(roadmap.description).slice(0, 2000));
+    lines.push("");
+  }
+  lines.push("## File targets");
+  lines.push("");
+  for (const f of roadmap.fileTargets || ROADMAP_FILE_TARGETS) {
+    lines.push(`- \`${f}\``);
+  }
+  lines.push("");
+  lines.push("## Execution order");
+  lines.push("");
+  for (const st of flattenRoadmapSteps(roadmap)) {
+    lines.push(
+      `${st.n}. **[${st.status}]** ${st.title} _(phase: ${st.phaseTitle})_`
+    );
+  }
+  lines.push("");
+
+  for (const ph of roadmap.phases || []) {
+    lines.push(`## ${ph.title}`);
+    lines.push("");
+    lines.push(`Status: **${ph.status || "pending"}**`);
+    if (ph.dependsOn?.length) {
+      lines.push(`Depends on: ${ph.dependsOn.join(", ")}`);
+    }
+    lines.push("");
+    for (const st of ph.steps || []) {
+      lines.push(`### Step ${st.n}: ${st.title}`);
+      lines.push("");
+      lines.push(`Status: **${st.status || "pending"}**`);
+      lines.push(`Files: ${(st.files || []).map((f) => `\`${f}\``).join(", ") || "_none_"}`);
+      lines.push("");
+      if (st.detail) {
+        lines.push(String(st.detail).trim());
+        lines.push("");
+      }
+      lines.push("Acceptance:");
+      for (const a of st.acceptance || []) {
+        lines.push(`- [ ] ${a}`);
+      }
+      lines.push("");
+      if (st.expansions?.length) {
+        lines.push("Expansions:");
+        for (const ex of st.expansions) {
+          lines.push(`- _${ex.at}_ — ${ex.detail}`);
+        }
+        lines.push("");
+      }
+    }
+  }
+
+  lines.push("## Iterations (append-only)");
+  lines.push("");
+  if (!roadmap.iterations?.length) {
+    lines.push("_None yet. Use `/roadmap expand step N` to deepen a step without overwrite._");
+  } else {
+    for (const it of roadmap.iterations) {
+      if (it.kind === "expand") {
+        lines.push(`### [${it.at}] expand step ${it.step}`);
+        lines.push(it.detail || "");
+      } else if (it.kind === "step_status") {
+        lines.push(`### [${it.at}] step ${it.step} → ${it.status}`);
+      } else if (it.kind === "status") {
+        lines.push(`### [${it.at}] roadmap status → ${it.status}`);
+      } else {
+        lines.push(`### [${it.at}] ${it.kind || "note"}`);
+        if (it.detail) lines.push(it.detail);
+      }
+      lines.push("");
+    }
+  }
+
+  lines.push("---");
+  lines.push("_Grimoire Roadmap Engine · local-first · append-only iterations_");
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * Compact chat summary for a roadmap.
+ */
+export function formatRoadmapSummary(roadmap, { verbose = false } = {}) {
+  if (!roadmap) return "_No roadmap._";
+  const steps = flattenRoadmapSteps(roadmap);
+  const lines = [
+    `### Roadmap · ${roadmap.title}`,
+    `Status: **${roadmap.status}** · slug: \`${roadmap.slug}\` · source: ${roadmap.source || "plain"}`,
+    `Path: \`grimoire-local/roadmaps/${roadmap.slug}.md\``,
+    `Files: ${(roadmap.fileTargets || []).map((f) => `\`${f}\``).join(", ")}`,
+    "",
+    "**Phases**",
+  ];
+  for (const ph of roadmap.phases || []) {
+    const deps = ph.dependsOn?.length ? ` · depends: ${ph.dependsOn.join(", ")}` : "";
+    lines.push(`- **${ph.title}** [${ph.status}]${deps}`);
+  }
+  lines.push("", "**Steps (execution order)**");
+  for (const st of steps) {
+    lines.push(
+      `${st.n}. [${st.status}] **${st.title}** — ${(st.files || []).map((f) => `\`${f}\``).join(", ")}`
+    );
+    if (verbose) {
+      for (const a of st.acceptance || []) {
+        lines.push(`   - [ ] ${a}`);
+      }
+      if (st.expansions?.length) {
+        lines.push(`   - _${st.expansions.length} expansion(s)_`);
+      }
+    }
+  }
+  lines.push(
+    "",
+    `_Iterate: \`/roadmap expand step N\` · status: \`/roadmap step N complete\` · \`/roadmap list\`_`
+  );
+  return lines.join("\n");
+}
+
+export function ensureRoadmapsState(state) {
+  if (!state || typeof state !== "object") return state;
+  if (!Array.isArray(state.roadmaps)) state.roadmaps = [];
+  if (state.activeRoadmapSlug === undefined) state.activeRoadmapSlug = null;
+  return state;
+}
+
+export function findRoadmapBySlug(state, slug) {
+  if (!state || !slug) return null;
+  const s = String(slug).toLowerCase();
+  return (
+    (state.roadmaps || []).find((r) => String(r.slug || "").toLowerCase() === s) ||
+    null
+  );
+}
+
+/** Ensure unique slug in state */
+export function uniqueRoadmapSlug(state, baseSlug) {
+  let slug = slugifyRoadmap(baseSlug);
+  const existing = new Set(
+    (state?.roadmaps || []).map((r) => String(r.slug || "").toLowerCase())
+  );
+  if (!existing.has(slug)) return slug;
+  let i = 2;
+  while (existing.has(`${slug}-${i}`)) i += 1;
+  return `${slug}-${i}`;
+}
+
+export function roadmapHelpText() {
+  return [
+    "### Roadmap Engine",
+    "Describe a feature in plain language — get phases, file targets, steps, and acceptance tests.",
+    "",
+    "**Commands**",
+    "- `/roadmap <feature description>` — generate plan",
+    "- `/roadmap` + paste SCROLL markdown — parse structured plan",
+    "- `/roadmap list` — list saved roadmaps",
+    "- `/roadmap show [slug]` — show plan",
+    "- `/roadmap expand step N [notes]` — deepen step (append-only)",
+    "- `/roadmap step N complete|pending|in-progress|blocked`",
+    "- `/roadmap status [slug] in-progress|complete|blocked|pending`",
+    "- `/roadmap open` — open Roadmap panel",
+    "",
+    "**File targets:** `js/app.js`, `js/data.js`, `js/intelligence.js`, `index.html`, `css/styles.css`",
+    "**Disk:** `GRIMOIRE-FocusIntelligence/grimoire-local/roadmaps/[slug].md`",
+    "",
+    "_Does not modify vault covenant, spell system, bus routing, or path gate unless the plan explicitly requires it._",
+  ].join("\n");
 }
 
 export const ALIGNMENT_DIRECTIVE_TEXT =

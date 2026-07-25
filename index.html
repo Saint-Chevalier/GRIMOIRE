@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/styles.css?v=glyph-actions-1" />
+  <link rel="stylesheet" href="css/styles.css?v=roadmap-engine-1" />
 </head>
 <body>
   <!-- WORLD: full-viewport universe canvas (z-index 0; .app is transparent over it) -->
@@ -443,11 +443,65 @@
             <strong>Tabs</strong>
             <span class="settings-meta">Future upgrade surface — reserved</span>
           </div>
-          <div class="settings-card">
+          <div
+            class="settings-card settings-card-action"
+            data-settings-open="roadmap"
+            role="button"
+            tabindex="0"
+            title="Open Roadmap Engine"
+          >
             <strong>Roadmap</strong>
-            <span class="settings-meta">Public build status and sealed changelog</span>
+            <span class="settings-meta">Plan features · phases · files · acceptance</span>
           </div>
         </div>
+        <p class="settings-hint">Tip: chat <code>/roadmap &lt;feature&gt;</code> or paste a SCROLL plan.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Roadmap Engine panel -->
+  <div id="roadmap-panel" class="roadmap-panel" hidden role="dialog" aria-label="Roadmap Engine">
+    <div class="roadmap-modal">
+      <header class="roadmap-header">
+        <div>
+          <strong>Roadmap Engine</strong>
+          <p class="roadmap-sub">Plain language or SCROLL paste → phases, files, steps, acceptance</p>
+        </div>
+        <button type="button" class="settings-close" id="btn-roadmap-close" aria-label="Close roadmap">×</button>
+      </header>
+      <div class="roadmap-body">
+        <div class="roadmap-compose">
+          <textarea
+            id="roadmap-input"
+            class="roadmap-input"
+            rows="3"
+            placeholder="Describe a feature (e.g. Add Chrono-Ring read-only timeline) or paste a SCROLL-generated roadmap…"
+            spellcheck="true"
+          ></textarea>
+          <div class="roadmap-compose-actions">
+            <button type="button" class="btn-primary" id="btn-roadmap-generate">Generate plan</button>
+            <button type="button" class="btn-secondary" id="btn-roadmap-parse">Parse SCROLL</button>
+            <label class="roadmap-filter-label">
+              Status
+              <select id="roadmap-status-filter" class="roadmap-status-filter">
+                <option value="all">All</option>
+                <option value="pending">pending</option>
+                <option value="in-progress">in-progress</option>
+                <option value="complete">complete</option>
+                <option value="blocked">blocked</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="roadmap-layout">
+          <aside class="roadmap-sidebar" id="roadmap-list" aria-label="Saved roadmaps"></aside>
+          <div class="roadmap-detail" id="roadmap-detail" aria-label="Roadmap detail"></div>
+        </div>
+        <p class="roadmap-foot">
+          Persist: <code>GRIMOIRE-FocusIntelligence/grimoire-local/roadmaps/[slug].md</code>
+          · Iterate: <code>/roadmap expand step N</code>
+          · Does not touch vault covenant, spells, bus, or path gate.
+        </p>
       </div>
     </div>
   </div>
@@ -466,7 +520,7 @@
   <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=glyph-actions-1"></script>
+  <script type="module" src="js/app.js?v=roadmap-engine-1"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.

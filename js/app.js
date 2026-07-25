@@ -66,13 +66,28 @@ import {
   makeBusMessage,
   resolveBusChannel,
   BUS_CHANNEL_ROUTES,
-} from "./data.js?v=glyph-actions-1";
+  parseRoadmapCommand,
+  generateRoadmapFromDescription,
+  parseScrollRoadmap,
+  looksLikeScrollRoadmap,
+  formatRoadmapMarkdown,
+  formatRoadmapSummary,
+  expandRoadmapStep,
+  setRoadmapStepStatus,
+  setRoadmapStatus,
+  ensureRoadmapsState,
+  findRoadmapBySlug,
+  uniqueRoadmapSlug,
+  roadmapHelpText,
+  flattenRoadmapSteps,
+  ROADMAP_STATUSES,
+} from "./data.js?v=roadmap-engine-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=glyph-actions-1";
+} from "./stars.js?v=roadmap-engine-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -80,7 +95,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=glyph-actions-1";
+} from "./universe.js?v=roadmap-engine-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -112,6 +127,9 @@ import {
   glyphsForSpell,
   mergeGlyphsIntoSpellContent,
   synthesizeGlyphTitle,
+  writeRoadmapFile,
+  appendRoadmapIteration,
+  listRoadmapFiles,
   saveEntityImage,
   classifyCell2Kind,
   entityIntelPath,
@@ -128,12 +146,12 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=glyph-actions-1";
+} from "./intelligence.js?v=roadmap-engine-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=glyph-actions-1";
+} from "./health.js?v=roadmap-engine-1";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -143,6 +161,30 @@ const PER_FOCUS_VAULT_MIGRATION_KEY = "grimoire-per-focus-vault-migrated-v1";
 const PATH_HARD_GATE_MIGRATION_KEY = "grimoire-path-hard-gate-v1";
 /** Session-only: hide path callout until reload / re-select (lock still holds) */
 const pathCalloutSessionDismissed = new Set();
+
+// ─── Mobile shell overlays ───
+
+let sidebarOverlay = null;
+let spellsOverlay = null;
+function ensureMobileOverlay(side) {
+  const key = side === 'sidebar' ? 'sidebarOverlay' : 'spellsOverlay';
+  const existing = window[key];
+  if (existing && existing.parentNode) return existing;
+  const el = document.createElement('div');
+  el.className = side === 'sidebar' ? 'sidebar-overlay' : 'spells-overlay';
+  el.style.display = 'none';
+  el.style.position = 'fixed';
+  el.style.inset = '0';
+  el.style.zIndex = '59';
+  el.style.background = 'rgba(0,0,0,0.5)';
+  el.addEventListener('click', () => {
+    if (side === 'sidebar') setSidebarCollapsed(true);
+    else setSpellsOpen(false);
+  });
+  document.body.appendChild(el);
+  window[key] = el;
+  return el;
+}
 
 // ─── State ───
 
@@ -240,6 +282,8 @@ try {
 ensureScrollFocus(state);
 // Cell2 Core — app self-intelligence engine (idempotent system seed)
 ensureCell2CoreFocus(state);
+// Roadmap Engine — structured build plans (memory + vault)
+ensureRoadmapsState(state);
 // Focus org UI (search is ephemeral; folders + pin/tags persist via saveState)
 if (!Array.isArray(state.focusFolders) || !state.focusFolders.length) {
   state.focusFolders = structuredClone(DEFAULT_FOCUS_FOLDERS);
@@ -365,6 +409,14 @@ const els = {
   btnCancelEdit: $("#btn-cancel-edit"),
   btnEditFocus: $("#btn-edit-focus"),
   btnCopyScrollList: $("#btn-copy-scroll-list"),
+  roadmapPanel: $("#roadmap-panel"),
+  btnRoadmapClose: $("#btn-roadmap-close"),
+  roadmapList: $("#roadmap-list"),
+  roadmapDetail: $("#roadmap-detail"),
+  roadmapInput: $("#roadmap-input"),
+  btnRoadmapGenerate: $("#btn-roadmap-generate"),
+  btnRoadmapParse: $("#btn-roadmap-parse"),
+  roadmapStatusFilter: $("#roadmap-status-filter"),
   appSettingsPanel: $("#app-settings-panel"),
   btnAppSettings: $("#btn-app-settings"),
   btnAppSettingsClose: $("#btn-app-settings-close"),
@@ -4530,12 +4582,21 @@ function sendMessage(text) {
   const convo = activeConvo();
   if (!convo || (!text || !text.trim())) return;
 
-  if (refuseIfFocusLocked(convo)) {
+  const userTextEarly = (text || "").trim();
+  // Roadmap Engine is app-level — allow /roadmap + explicit SCROLL plan paste through path lock
+  const roadmapBypass =
+    /^\/roadmap\b/i.test(userTextEarly) ||
+    (state.activeRoadmapSlug &&
+      /^expand\s+step\s+\d+/i.test(userTextEarly)) ||
+    (/^#\s*roadmap\b/im.test(userTextEarly) &&
+      looksLikeScrollRoadmap(userTextEarly));
+
+  if (!roadmapBypass && refuseIfFocusLocked(convo)) {
     renderChat();
     return;
   }
 
-  const userText = (text || "").trim();
+  const userText = userTextEarly;
 
   // Cancel await-paste via typed "cancel"
   if (/^cancel$/i.test(userText)) {
@@ -4563,6 +4624,37 @@ function sendMessage(text) {
     void teachSpellGlyph(targetSpell, convo, body, { scope: "spell" }).then(() => {
       void renderSpells();
     });
+    return;
+  }
+
+  // === Roadmap Engine — plan features (before bus / normal chat) ===
+  // Explicit /roadmap … or a document that opens with "# Roadmap" (SCROLL paste).
+  const roadmapCmd =
+    parseRoadmapCommand(userText) ||
+    (/^#\s*roadmap\b/im.test(userText) && looksLikeScrollRoadmap(userText)
+      ? { op: "parse", text: userText, raw: userText }
+      : null);
+  // Natural "expand step N" only when an active roadmap exists
+  const expandBare =
+    !roadmapCmd &&
+    state.activeRoadmapSlug &&
+    userText.match(/^expand\s+step\s+(\d+)\s*[:\-]?\s*([\s\S]*)$/i);
+  if (roadmapCmd || expandBare) {
+    const cmd = roadmapCmd || {
+      op: "expand",
+      step: Number(expandBare[1]),
+      detail: String(expandBare[2] || "").trim(),
+      raw: userText,
+    };
+    // Record operator turn then handle (roadmap replies as grimoire)
+    convo.messages.push({
+      id: uid("msg"),
+      role: "user",
+      text: userText,
+      ts: Date.now(),
+      kind: "roadmap-cmd",
+    });
+    void handleRoadmapCommand(convo, cmd, userText);
     return;
   }
 
@@ -8336,6 +8428,36 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Roadmap panel events
+els.btnRoadmapClose?.addEventListener("click", () => closeRoadmapPanel());
+els.btnRoadmapGenerate?.addEventListener("click", () => {
+  void generateRoadmapFromPanel("create");
+});
+els.btnRoadmapParse?.addEventListener("click", () => {
+  void generateRoadmapFromPanel("parse");
+});
+els.roadmapStatusFilter?.addEventListener("change", () => renderRoadmapPanel());
+els.roadmapPanel?.addEventListener("click", (e) => {
+  // backdrop click closes
+  if (e.target === els.roadmapPanel) closeRoadmapPanel();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && els.roadmapPanel && !els.roadmapPanel.hasAttribute("hidden")) {
+    closeRoadmapPanel();
+  }
+});
+
+// Settings → Roadmap card
+document.querySelectorAll("[data-settings-open='roadmap']").forEach((el) => {
+  el.addEventListener("click", () => openRoadmapPanel());
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openRoadmapPanel();
+    }
+  });
+});
+
 function openAppSettings() {
   if (!els.appSettingsPanel) return;
   els.appSettingsPanel.removeAttribute("hidden");
@@ -8345,6 +8467,439 @@ function openAppSettings() {
 function closeAppSettings() {
   if (!els.appSettingsPanel) return;
   els.appSettingsPanel.setAttribute("hidden", "");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Roadmap Engine — /roadmap + panel (does not touch vault covenant / spells / bus / path gate)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function activeRoadmap() {
+  ensureRoadmapsState(state);
+  if (!state.activeRoadmapSlug) return (state.roadmaps || [])[0] || null;
+  return (
+    findRoadmapBySlug(state, state.activeRoadmapSlug) ||
+    (state.roadmaps || [])[0] ||
+    null
+  );
+}
+
+async function persistRoadmapToVault(roadmap) {
+  if (!roadmap) return { ok: false };
+  const md = formatRoadmapMarkdown(roadmap);
+  const focusId = activeConvo()?.id || null;
+  try {
+    const result = await writeRoadmapFile(roadmap, md, { focusId });
+    roadmap.path = result?.path || `grimoire-local/roadmaps/${roadmap.slug}.md`;
+    roadmap.lastWriteMethod = result?.method || "memory";
+    return result;
+  } catch (err) {
+    console.warn("persistRoadmapToVault", err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+function upsertRoadmap(roadmap) {
+  ensureRoadmapsState(state);
+  if (!roadmap) return;
+  const idx = (state.roadmaps || []).findIndex(
+    (r) => r.slug === roadmap.slug || r.id === roadmap.id
+  );
+  if (idx >= 0) state.roadmaps[idx] = roadmap;
+  else state.roadmaps.push(roadmap);
+  state.activeRoadmapSlug = roadmap.slug;
+  persist();
+}
+
+async function handleRoadmapCommand(convo, cmd, rawText) {
+  ensureRoadmapsState(state);
+  if (!cmd) return;
+
+  const reply = (text, kind = "roadmap") => {
+    if (!convo) return;
+    convo.messages = convo.messages || [];
+    convo.messages.push({
+      id: uid("msg"),
+      role: "grimoire",
+      text,
+      kind,
+      ts: Date.now(),
+    });
+    persist();
+    renderChat();
+  };
+
+  if (cmd.op === "help") {
+    reply(roadmapHelpText());
+    toast("Roadmap help", "");
+    return;
+  }
+
+  if (cmd.op === "open") {
+    openRoadmapPanel();
+    reply("Opened **Roadmap** panel. Paste a feature description or SCROLL plan.");
+    return;
+  }
+
+  if (cmd.op === "list") {
+    const list = state.roadmaps || [];
+    let disk = [];
+    try {
+      disk = await listRoadmapFiles({ focusId: convo?.id });
+    } catch {
+      disk = [];
+    }
+    if (!list.length && !disk.length) {
+      reply(
+        "No roadmaps yet. Try:\n`/roadmap Add Chrono-Ring read-only timeline for Focus events`"
+      );
+      return;
+    }
+    const lines = ["### Roadmaps", ""];
+    for (const r of list) {
+      const steps = flattenRoadmapSteps(r);
+      const done = steps.filter((s) => s.status === "complete").length;
+      lines.push(
+        `- **${r.title}** \`${r.slug}\` · **${r.status}** · ${done}/${steps.length} steps`
+      );
+    }
+    if (disk.length) {
+      lines.push("", `_Vault files:_ ${disk.map((s) => `\`${s}.md\``).join(", ")}`);
+    }
+    lines.push("", "Show one: `/roadmap show <slug>`");
+    reply(lines.join("\n"));
+    return;
+  }
+
+  if (cmd.op === "show") {
+    const rm =
+      (cmd.slug && findRoadmapBySlug(state, cmd.slug)) || activeRoadmap();
+    if (!rm) {
+      reply("No roadmap to show. Create one with `/roadmap <description>`.");
+      return;
+    }
+    state.activeRoadmapSlug = rm.slug;
+    persist();
+    reply(formatRoadmapSummary(rm, { verbose: true }));
+    renderRoadmapPanel();
+    return;
+  }
+
+  if (cmd.op === "create" || cmd.op === "parse") {
+    const text = String(cmd.text || rawText || "").trim();
+    if (!text) {
+      reply(roadmapHelpText());
+      return;
+    }
+    let roadmap;
+    if (cmd.op === "parse" || looksLikeScrollRoadmap(text)) {
+      roadmap = parseScrollRoadmap(text, { source: "scroll" });
+    } else {
+      roadmap = generateRoadmapFromDescription(text, { source: "plain" });
+    }
+    if (!roadmap) {
+      reply("Could not build a roadmap from that input.");
+      return;
+    }
+    // Unique slug if collision — keep existing if same title re-run: update by append iteration
+    const existing = findRoadmapBySlug(state, roadmap.slug);
+    if (existing) {
+      // Merge: keep id/slug/iterations; replace phases from new parse only if operator wants full regen
+      // Default: treat as new version via unique slug suffix, unless identical slug re-create
+      roadmap.slug = uniqueRoadmapSlug(state, roadmap.slug);
+      roadmap.path = `grimoire-local/roadmaps/${roadmap.slug}.md`;
+    }
+    upsertRoadmap(roadmap);
+    const write = await persistRoadmapToVault(roadmap);
+    const method = write?.method || "memory";
+    reply(
+      formatRoadmapSummary(roadmap, { verbose: true }) +
+        `\n\n_Persisted · ${method} · \`${roadmap.path || `grimoire-local/roadmaps/${roadmap.slug}.md`}\`_`
+    );
+    toast(`Roadmap forged: ${roadmap.title}`, "success");
+    renderRoadmapPanel();
+    return;
+  }
+
+  if (cmd.op === "expand") {
+    const rm = activeRoadmap();
+    if (!rm) {
+      reply("No active roadmap. Create one first: `/roadmap <description>`");
+      return;
+    }
+    const updated = expandRoadmapStep(rm, cmd.step, cmd.detail);
+    if (!updated) {
+      reply(`Step **${cmd.step}** not found on \`${rm.slug}\`.`);
+      return;
+    }
+    upsertRoadmap(updated);
+    // True append on disk + full structured rewrite (iterations preserved in body)
+    await appendRoadmapIteration(
+      updated.slug,
+      `expand step ${cmd.step}${cmd.detail ? `: ${cmd.detail}` : ""}`,
+      { focusId: convo?.id }
+    );
+    await persistRoadmapToVault(updated);
+    reply(
+      `**Expanded step ${cmd.step}** on \`${updated.slug}\` (append-only).\n\n` +
+        formatRoadmapSummary(updated, { verbose: true })
+    );
+    toast(`Expanded step ${cmd.step}`, "success");
+    renderRoadmapPanel();
+    return;
+  }
+
+  if (cmd.op === "step_status") {
+    const rm = activeRoadmap();
+    if (!rm) {
+      reply("No active roadmap.");
+      return;
+    }
+    const updated = setRoadmapStepStatus(rm, cmd.step, cmd.status);
+    if (!updated) {
+      reply(`Step **${cmd.step}** not found.`);
+      return;
+    }
+    upsertRoadmap(updated);
+    await appendRoadmapIteration(
+      updated.slug,
+      `step ${cmd.step} → ${cmd.status}`,
+      { focusId: convo?.id }
+    );
+    await persistRoadmapToVault(updated);
+    reply(
+      `Step **${cmd.step}** → **${cmd.status}** · roadmap **${updated.status}**\n\n` +
+        formatRoadmapSummary(updated)
+    );
+    renderRoadmapPanel();
+    return;
+  }
+
+  if (cmd.op === "status") {
+    const rm =
+      (cmd.slug && findRoadmapBySlug(state, cmd.slug)) || activeRoadmap();
+    if (!rm) {
+      reply("No roadmap found for status update.");
+      return;
+    }
+    setRoadmapStatus(rm, cmd.status);
+    upsertRoadmap(rm);
+    await appendRoadmapIteration(rm.slug, `roadmap status → ${cmd.status}`, {
+      focusId: convo?.id,
+    });
+    await persistRoadmapToVault(rm);
+    reply(`Roadmap \`${rm.slug}\` → **${rm.status}**`);
+    renderRoadmapPanel();
+    return;
+  }
+
+  reply(roadmapHelpText());
+}
+
+function openRoadmapPanel() {
+  closeAppSettings();
+  if (!els.roadmapPanel) {
+    toast("Roadmap panel missing — hard-refresh", "");
+    return;
+  }
+  els.roadmapPanel.removeAttribute("hidden");
+  renderRoadmapPanel();
+  try {
+    els.roadmapInput?.focus();
+  } catch {
+    /* ignore */
+  }
+}
+
+function closeRoadmapPanel() {
+  if (!els.roadmapPanel) return;
+  els.roadmapPanel.setAttribute("hidden", "");
+}
+
+function renderRoadmapPanel() {
+  ensureRoadmapsState(state);
+  const listEl = els.roadmapList;
+  const detailEl = els.roadmapDetail;
+  if (!listEl && !detailEl) return;
+
+  const filter = els.roadmapStatusFilter?.value || "all";
+  let items = [...(state.roadmaps || [])];
+  if (filter !== "all") {
+    items = items.filter((r) => r.status === filter);
+  }
+  items.sort(
+    (a, b) =>
+      Date.parse(b.updatedAt || b.createdAt || 0) -
+      Date.parse(a.updatedAt || a.createdAt || 0)
+  );
+
+  if (listEl) {
+    if (!items.length) {
+      listEl.innerHTML =
+        `<p class="roadmap-empty">No roadmaps yet. Describe a feature below or use <code>/roadmap …</code> in chat.</p>`;
+    } else {
+      listEl.innerHTML = items
+        .map((r) => {
+          const steps = flattenRoadmapSteps(r);
+          const done = steps.filter((s) => s.status === "complete").length;
+          const active =
+            r.slug === state.activeRoadmapSlug ? " is-active" : "";
+          return `<button type="button" class="roadmap-list-item${active}" data-slug="${escapeAttr(r.slug)}">
+            <span class="roadmap-list-title">${escapeHtml(r.title)}</span>
+            <span class="roadmap-list-meta">
+              <span class="roadmap-status-chip status-${escapeAttr(r.status)}">${escapeHtml(r.status)}</span>
+              <span>${done}/${steps.length}</span>
+            </span>
+          </button>`;
+        })
+        .join("");
+      listEl.querySelectorAll("[data-slug]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          state.activeRoadmapSlug = btn.getAttribute("data-slug");
+          persist();
+          renderRoadmapPanel();
+        });
+      });
+    }
+  }
+
+  if (detailEl) {
+    const rm = activeRoadmap();
+    if (!rm) {
+      detailEl.innerHTML =
+        `<p class="roadmap-empty">Select or create a roadmap. File targets: <code>js/app.js</code>, <code>js/data.js</code>, <code>js/intelligence.js</code>, <code>index.html</code>, <code>css/styles.css</code>.</p>`;
+    } else {
+      const steps = flattenRoadmapSteps(rm);
+      const phasesHtml = (rm.phases || [])
+        .map((ph) => {
+          const deps = ph.dependsOn?.length
+            ? `<span class="roadmap-deps">depends: ${escapeHtml(ph.dependsOn.join(", "))}</span>`
+            : "";
+          const stepsHtml = (ph.steps || [])
+            .map((st) => {
+              const files = (st.files || [])
+                .map((f) => `<code>${escapeHtml(f)}</code>`)
+                .join(" ");
+              const acc = (st.acceptance || [])
+                .map((a) => `<li>${escapeHtml(a)}</li>`)
+                .join("");
+              const exp = (st.expansions || [])
+                .map(
+                  (e) =>
+                    `<li class="roadmap-expand-item"><em>${escapeHtml(e.at || "")}</em> — ${escapeHtml(e.detail || "")}</li>`
+                )
+                .join("");
+              return `<div class="roadmap-step" data-step="${st.n}">
+                <div class="roadmap-step-head">
+                  <strong>Step ${st.n}: ${escapeHtml(st.title)}</strong>
+                  <span class="roadmap-status-chip status-${escapeAttr(st.status)}">${escapeHtml(st.status)}</span>
+                </div>
+                <div class="roadmap-step-files">${files}</div>
+                <p class="roadmap-step-detail">${escapeHtml(String(st.detail || "").slice(0, 400))}</p>
+                <ul class="roadmap-acceptance">${acc}</ul>
+                ${exp ? `<ul class="roadmap-expansions">${exp}</ul>` : ""}
+                <div class="roadmap-step-actions">
+                  <button type="button" class="btn-secondary btn-xs" data-action="expand" data-step="${st.n}">Expand</button>
+                  <button type="button" class="btn-secondary btn-xs" data-action="status" data-step="${st.n}" data-status="in-progress">In progress</button>
+                  <button type="button" class="btn-secondary btn-xs" data-action="status" data-step="${st.n}" data-status="complete">Complete</button>
+                  <button type="button" class="btn-secondary btn-xs" data-action="status" data-step="${st.n}" data-status="blocked">Blocked</button>
+                </div>
+              </div>`;
+            })
+            .join("");
+          return `<section class="roadmap-phase">
+            <header class="roadmap-phase-head">
+              <h3>${escapeHtml(ph.title)}</h3>
+              <span class="roadmap-status-chip status-${escapeAttr(ph.status || "pending")}">${escapeHtml(ph.status || "pending")}</span>
+              ${deps}
+            </header>
+            ${stepsHtml}
+          </section>`;
+        })
+        .join("");
+
+      detailEl.innerHTML = `
+        <header class="roadmap-detail-head">
+          <div>
+            <h2>${escapeHtml(rm.title)}</h2>
+            <p class="roadmap-detail-meta">
+              <span class="roadmap-status-chip status-${escapeAttr(rm.status)}">${escapeHtml(rm.status)}</span>
+              <code>${escapeHtml(rm.slug)}</code>
+              · <code>grimoire-local/roadmaps/${escapeHtml(rm.slug)}.md</code>
+              · ${steps.length} steps
+            </p>
+          </div>
+          <div class="roadmap-detail-actions">
+            <button type="button" class="btn-secondary btn-xs" id="btn-roadmap-copy-md" title="Copy markdown">Copy MD</button>
+            <button type="button" class="btn-secondary btn-xs" id="btn-roadmap-set-progress">Mark in-progress</button>
+          </div>
+        </header>
+        <p class="roadmap-intent">${escapeHtml(String(rm.description || "").slice(0, 500))}</p>
+        <div class="roadmap-files-row">${(rm.fileTargets || [])
+          .map((f) => `<code>${escapeHtml(f)}</code>`)
+          .join(" ")}</div>
+        ${phasesHtml}
+      `;
+
+      detailEl.querySelector("#btn-roadmap-copy-md")?.addEventListener("click", async () => {
+        const md = formatRoadmapMarkdown(rm);
+        try {
+          await navigator.clipboard.writeText(md);
+          toast("Roadmap markdown copied", "success");
+        } catch {
+          toast("Copy failed", "");
+        }
+      });
+      detailEl
+        .querySelector("#btn-roadmap-set-progress")
+        ?.addEventListener("click", () => {
+          setRoadmapStatus(rm, "in-progress");
+          upsertRoadmap(rm);
+          void persistRoadmapToVault(rm);
+          renderRoadmapPanel();
+          toast("Roadmap in-progress", "");
+        });
+      detailEl.querySelectorAll("[data-action]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const action = btn.getAttribute("data-action");
+          const step = Number(btn.getAttribute("data-step"));
+          const c = activeConvo();
+          if (action === "expand") {
+            const note = window.prompt(
+              `Expand step ${step} (optional notes — append-only):`,
+              ""
+            );
+            if (note === null) return;
+            void handleRoadmapCommand(
+              c,
+              { op: "expand", step, detail: note },
+              `expand step ${step}`
+            ).then(() => renderRoadmapPanel());
+          } else if (action === "status") {
+            const status = btn.getAttribute("data-status");
+            void handleRoadmapCommand(
+              c,
+              { op: "step_status", step, status },
+              `/roadmap step ${step} ${status}`
+            ).then(() => renderRoadmapPanel());
+          }
+        });
+      });
+    }
+  }
+}
+
+async function generateRoadmapFromPanel(mode) {
+  const text = String(els.roadmapInput?.value || "").trim();
+  if (!text) {
+    toast("Describe a feature or paste a SCROLL roadmap", "");
+    return;
+  }
+  const convo = activeConvo();
+  const op =
+    mode === "parse" || looksLikeScrollRoadmap(text) ? "parse" : "create";
+  await handleRoadmapCommand(convo, { op, text, raw: text }, text);
+  if (els.roadmapInput) els.roadmapInput.value = "";
+  renderRoadmapPanel();
 }
 
 /* ─── EVG ─── */
