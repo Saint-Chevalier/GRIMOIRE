@@ -3,6 +3,9 @@
 Public method roadmap for **Grimoire — Constellation Codex**.  
 Private operator doctrine is never required to run or contribute.
 
+**Canonical in-app plan:** [GRIMOIRE Sovereign Evolution](./roadmaps/grimoire-sovereign-evolution.md)  
+(`slug: grimoire-sovereign-evolution` · load via `/roadmap sovereign` · verify via `/roadmap verify`)
+
 ## Shipped (v0 public brick)
 
 - Sealed Focus model (1 Focus = 1 receiving entity)

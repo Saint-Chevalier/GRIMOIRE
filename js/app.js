@@ -91,14 +91,17 @@ import {
   structuralLintSource,
   evalSourceMatch,
   makeRoadmapCheck,
+  ensureSovereignEvolutionRoadmap,
+  buildGrimoireSovereignEvolutionRoadmap,
+  SOVEREIGN_EVOLUTION_SLUG,
   ROADMAP_STATUSES,
-} from "./data.js?v=x-recruit-1";
+} from "./data.js?v=sovereign-evolution-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=x-recruit-1";
+} from "./stars.js?v=sovereign-evolution-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -106,7 +109,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=x-recruit-1";
+} from "./universe.js?v=sovereign-evolution-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -166,12 +169,12 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=x-recruit-1";
+} from "./intelligence.js?v=sovereign-evolution-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=x-recruit-1";
+} from "./health.js?v=sovereign-evolution-1";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -304,6 +307,8 @@ ensureScrollFocus(state);
 ensureCell2CoreFocus(state);
 // Roadmap Engine — structured build plans (memory + vault)
 ensureRoadmapsState(state);
+// One canonical self-evolution plan (SCROLL plans · Grimoire verifies)
+ensureSovereignEvolutionRoadmap(state);
 // SCROLL List auto-curates whenever vault writes land
 setScrollListCurateProvider(() => ({
   conversations: state.conversations,
@@ -8987,6 +8992,25 @@ async function handleRoadmapCommand(convo, cmd, rawText) {
   if (cmd.op === "help") {
     reply(roadmapHelpText());
     toast("Roadmap help", "");
+    return;
+  }
+
+  if (cmd.op === "sovereign") {
+    const rm = ensureSovereignEvolutionRoadmap(state);
+    // Refresh structure if empty phases (never wipe verification progress)
+    if (!rm.phases?.length) {
+      const fresh = buildGrimoireSovereignEvolutionRoadmap();
+      Object.assign(rm, fresh);
+    }
+    state.activeRoadmapSlug = rm.slug || SOVEREIGN_EVOLUTION_SLUG;
+    upsertRoadmap(rm);
+    void persistRoadmapToVault(rm);
+    reply(
+      formatRoadmapSummary(rm, { verbose: true }) +
+        `\n\n_Canonical · local-first · slug \`${rm.slug}\`_\n_Verify: \`/roadmap verify ${rm.slug}\`_`
+    );
+    toast("GRIMOIRE Sovereign Evolution loaded", "success");
+    renderRoadmapPanel();
     return;
   }
 

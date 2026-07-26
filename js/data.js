@@ -2856,6 +2856,11 @@ export function parseRoadmapCommand(text) {
     return { op: "verify", slug: verify[1] || null, raw };
   }
 
+  // /roadmap sovereign | /roadmap canonical — one plan
+  if (/^(sovereign|canonical|self-?evolution)$/i.test(rest)) {
+    return { op: "sovereign", raw };
+  }
+
   const stepStatus = rest.match(
     /^step\s+(\d+)\s+(pending|in-progress|in_progress|complete|done|blocked|wip|active)$/i
   );
@@ -3499,18 +3504,30 @@ export function formatRoadmapMarkdown(roadmap) {
   lines.push(`id: ${roadmap.id}`);
   lines.push(`status: ${roadmap.status || "pending"}`);
   lines.push(`source: ${roadmap.source || "plain"}`);
+  if (roadmap.canonical) lines.push(`canonical: true`);
   lines.push(`createdAt: ${roadmap.createdAt || ""}`);
   lines.push(`updatedAt: ${roadmap.updatedAt || ""}`);
   lines.push(`path: grimoire-local/roadmaps/${roadmap.slug}.md`);
   lines.push(
     `files: [${(roadmap.fileTargets || []).map((f) => `"${f}"`).join(", ")}]`
   );
+  if (roadmap.rules?.syncRule) {
+    lines.push(`sync_rule: ${JSON.stringify(roadmap.rules.syncRule)}`);
+  }
+  lines.push(`local_only: true`);
   lines.push("```");
   lines.push("");
   if (roadmap.description) {
     lines.push("## Intent");
     lines.push("");
-    lines.push(String(roadmap.description).slice(0, 2000));
+    lines.push(String(roadmap.description).slice(0, 4000));
+    lines.push("");
+  }
+  if (roadmap.rules) {
+    lines.push("## Rules");
+    lines.push("");
+    lines.push(`- **Sync:** ${roadmap.rules.syncRule || "SCROLL plans · Grimoire verifies"}`);
+    lines.push(`- Local-first only: no cloud sync, no accounts, no external APIs`);
     lines.push("");
   }
   lines.push("## File targets");
@@ -3540,14 +3557,24 @@ export function formatRoadmapMarkdown(roadmap) {
       lines.push(`### Step ${st.n}: ${st.title}`);
       lines.push("");
       lines.push(`Status: **${st.status || "pending"}**`);
+      if (st.verification_slug) {
+        lines.push(`verification_slug: \`${st.verification_slug}\``);
+      }
+      if (Array.isArray(st.verification_dependencies) && st.verification_dependencies.length) {
+        lines.push(
+          `verification_dependencies: ${st.verification_dependencies.map((d) => `\`${d}\``).join(", ")}`
+        );
+      }
       lines.push(`Files: ${(st.files || []).map((f) => `\`${f}\``).join(", ") || "_none_"}`);
       lines.push("");
       if (st.detail) {
         lines.push(String(st.detail).trim());
         lines.push("");
       }
+      const criteria =
+        st.acceptance_criteria || st.acceptance || [];
       lines.push("Acceptance:");
-      for (const a of st.acceptance || []) {
+      for (const a of criteria) {
         const done =
           st.verified && st.verification?.result === "pass" ? "[x]" : "[ ]";
         lines.push(`- ${done} ${a}`);
@@ -3696,6 +3723,375 @@ export function uniqueRoadmapSlug(state, baseSlug) {
   return `${slug}-${i}`;
 }
 
+/** Canonical slug for the one sovereign self-evolution plan */
+export const SOVEREIGN_EVOLUTION_SLUG = "grimoire-sovereign-evolution";
+
+/**
+ * Build the one canonical roadmap: GRIMOIRE Sovereign Evolution.
+ * SCROLL generates the plan; Grimoire executes + verifies (local-first only).
+ */
+export function buildGrimoireSovereignEvolutionRoadmap() {
+  const now = new Date().toISOString();
+  const step = (n, partial) => {
+    const st = {
+      id: `s${n}`,
+      n,
+      title: partial.title,
+      detail: partial.detail || "",
+      files: partial.files || [...ROADMAP_FILE_TARGETS],
+      status: partial.status || "pending",
+      acceptance: partial.acceptance_criteria || partial.acceptance || [],
+      acceptance_criteria: partial.acceptance_criteria || partial.acceptance || [],
+      verification_slug: partial.verification_slug || `sev-step-${n}`,
+      verification_dependencies: partial.verification_dependencies || [],
+      expansions: [],
+      verified: false,
+      verification: null,
+      checks: partial.checks || [],
+    };
+    st.checks = ensureStepChecks(st, {
+      slug: SOVEREIGN_EVOLUTION_SLUG,
+      title: "GRIMOIRE Sovereign Evolution",
+    });
+    // Merge explicit structured checks first
+    if (Array.isArray(partial.checks) && partial.checks.length) {
+      const seen = new Set(st.checks.map((c) => `${c.kind}|${c.path}|${c.pattern}`));
+      for (const c of partial.checks) {
+        const m = makeRoadmapCheck(c);
+        const key = `${m.kind}|${m.path}|${m.pattern}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          st.checks.push(m);
+        }
+      }
+    }
+    return st;
+  };
+
+  const phases = [
+    {
+      id: "p1",
+      title: "Phase 1 — Verification & Stability",
+      status: "in-progress",
+      dependsOn: [],
+      steps: [
+        step(1, {
+          title: "Fix bus relay serialization",
+          detail:
+            "Preserve full message body on bus route/relay densen and chat acks — never truncate to a preview-only payload. Display may summarize; vault + densen must keep full body.",
+          files: ["js/app.js", "js/intelligence.js", "js/data.js"],
+          status: "pending",
+          verification_slug: "sev-01-bus-relay-full-body",
+          verification_dependencies: [],
+          acceptance_criteria: [
+            "Bus densen appends full operator message body (not slice-only preview)",
+            "Relay between focuses preserves full payload in receiving intelligence.md",
+            "source_match: js/intelligence.js /densenBusMessage/",
+            "lint: js/app.js",
+            "lint: js/intelligence.js",
+            "No cloud/network bus calls introduced",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/intelligence.js", pattern: "densenBusMessage" },
+            { kind: "source_match", path: "js/app.js", pattern: "handleBusRoute" },
+            { kind: "source_match", path: "js/app.js", pattern: "relayIntelBetweenFocuses" },
+            { kind: "lint", path: "js/app.js" },
+            { kind: "lint", path: "js/intelligence.js" },
+          ],
+        }),
+        step(2, {
+          title: "Grimoire self-write-back",
+          detail:
+            "Auto-append GRIMOIRE replies to focus intelligence.md via auto-write-back loop (shipped baseline 2a52f6b). Verify every reply path densens without blocking UI; toast Vault written.",
+          files: ["js/app.js", "js/intelligence.js"],
+          status: "in-progress",
+          verification_slug: "sev-01-grimoire-self-writeback",
+          verification_dependencies: [],
+          acceptance_criteria: [
+            "queueAutoWriteBack or autoWriteFocusIntelligence present",
+            "GRIMOIRE_REPLY event densens on chat replies",
+            "Append-only YAML frontmatter entries only",
+            "file_exists: js/intelligence.js",
+            "source_match: js/app.js /queueAutoWriteBack|autoWriteFocusIntelligence|GRIMOIRE_REPLY/",
+            "UI not blocked by vault I/O (async / void fire-and-forget)",
+          ],
+          checks: [
+            { kind: "file_exists", path: "js/intelligence.js" },
+            { kind: "source_match", path: "js/intelligence.js", pattern: "autoWriteFocusIntelligence" },
+            { kind: "source_match", path: "js/app.js", pattern: "queueAutoWriteBack" },
+            { kind: "source_match", path: "js/app.js", pattern: "GRIMOIRE_REPLY" },
+            { kind: "lint", path: "js/app.js" },
+          ],
+        }),
+        step(3, {
+          title: "Duplicate focus cleanup",
+          detail:
+            "Merge/remove duplicate Wizard King entries (e.g. legacy dual Hermes/Grok seeds and user duplicates) without losing sealed history. Operator-safe merge; no silent data loss.",
+          files: ["js/data.js", "js/app.js"],
+          status: "pending",
+          verification_slug: "sev-01-dedupe-wizard-king",
+          verification_dependencies: ["sev-01-grimoire-self-writeback"],
+          acceptance_criteria: [
+            "Dedupe or merge helper for focusIdentityKey collisions",
+            "Wizard King Hermes + Grok remain intentionally dual-channel OR documented single sealed channel policy",
+            "source_match: js/data.js /focusIdentityKey|focusExists|wizard-king/",
+            "lint: js/data.js",
+            "No automatic cloud upload of vault history",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/data.js", pattern: "focusIdentityKey" },
+            { kind: "source_match", path: "js/data.js", pattern: "wizard-king" },
+            { kind: "lint", path: "js/data.js" },
+            { kind: "lint", path: "js/app.js" },
+          ],
+        }),
+      ],
+    },
+    {
+      id: "p2",
+      title: "Phase 2 — Sovereign Generation",
+      status: "pending",
+      dependsOn: ["p1"],
+      steps: [
+        step(4, {
+          title: "/roadmap generate — local NL plans",
+          detail:
+            "Natural-language roadmap generation fully inside Grimoire (no Base44 dependency). `/roadmap <desc>` and SCROLL parse already form the spine; harden as explicit generate op + sovereign evolution seed.",
+          files: ["js/data.js", "js/app.js"],
+          status: "in-progress",
+          verification_slug: "sev-02-roadmap-generate-local",
+          verification_dependencies: ["sev-01-bus-relay-full-body"],
+          acceptance_criteria: [
+            "parseRoadmapCommand + generateRoadmapFromDescription local-only",
+            "Canonical roadmap buildGrimoireSovereignEvolutionRoadmap exportable",
+            "No Base44 / external API calls in generate path",
+            "source_match: js/data.js /generateRoadmapFromDescription/",
+            "source_match: js/data.js /buildGrimoireSovereignEvolutionRoadmap|SOVEREIGN_EVOLUTION/",
+            "/roadmap verify gates complete",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/data.js", pattern: "generateRoadmapFromDescription" },
+            { kind: "source_match", path: "js/data.js", pattern: "buildGrimoireSovereignEvolutionRoadmap" },
+            { kind: "source_match", path: "js/data.js", pattern: "canMarkStepComplete" },
+            { kind: "lint", path: "js/data.js" },
+          ],
+        }),
+        step(5, {
+          title: "Spell auto-engagement",
+          detail:
+            "Forge ENGAGE spell when an uncontacted node is detected (SCROLL / curiosity path). Keep WYFWYG: card lands in spell book; human still copies/casts.",
+          files: ["js/app.js", "js/data.js", "js/intelligence.js"],
+          status: "in-progress",
+          verification_slug: "sev-02-spell-auto-engage",
+          verification_dependencies: ["sev-02-roadmap-generate-local"],
+          acceptance_criteria: [
+            "autoGenerateNodeEngageSpells or equivalent present",
+            "ENGAGE spells target uncontacted SCROLL nodes only",
+            "No silent outbound network send",
+            "source_match: js/app.js /autoGenerateNodeEngageSpells|ENGAGE|isNodeEngageSpell/",
+            "lint: js/app.js",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/app.js", pattern: "autoGenerateNodeEngageSpells|isNodeEngageSpell" },
+            { kind: "source_match", path: "js/app.js", pattern: "ENGAGE" },
+            { kind: "lint", path: "js/app.js" },
+          ],
+        }),
+        step(6, {
+          title: "X Recruitment Intake",
+          detail:
+            "Auto-capture potential Magic Knight intelligence from X (and Discord phrasing later). Path magic-knights/[handle]/intelligence.md; SCROLL yes/no/maybe; handle private until yes. Baseline shipped 489114c.",
+          files: ["js/app.js", "js/intelligence.js"],
+          status: "in-progress",
+          verification_slug: "sev-02-x-recruit-intake",
+          verification_dependencies: ["sev-02-spell-auto-engage"],
+          acceptance_criteria: [
+            "writeMagicKnightIntake + parseMagicKnightIntake present",
+            "Vault path magic-knights/[handle]/intelligence.md",
+            "SCROLL knighthood yes|no|maybe; handle sealed unless yes",
+            "source_match: js/intelligence.js /writeMagicKnightIntake/",
+            "source_match: js/intelligence.js /classifyMagicKnighthood/",
+            "No external X/Twitter API",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/intelligence.js", pattern: "writeMagicKnightIntake" },
+            { kind: "source_match", path: "js/intelligence.js", pattern: "classifyMagicKnighthood" },
+            { kind: "source_match", path: "js/intelligence.js", pattern: "magic-knights" },
+            { kind: "source_match", path: "js/app.js", pattern: "handleMagicKnightIntake" },
+            { kind: "lint", path: "js/intelligence.js" },
+          ],
+        }),
+      ],
+    },
+    {
+      id: "p3",
+      title: "Phase 3 — Experience & Polish",
+      status: "pending",
+      dependsOn: ["p2"],
+      steps: [
+        step(7, {
+          title: "Mobile dedicated layout",
+          detail:
+            "Input-first mobile shell: bottom nav, full-screen chat, swipeable spells panel. CSS + minimal app shell flags; no native store dependency.",
+          files: ["css/styles.css", "index.html", "js/app.js"],
+          status: "pending",
+          verification_slug: "sev-03-mobile-layout",
+          verification_dependencies: ["sev-02-x-recruit-intake"],
+          acceptance_criteria: [
+            "Mobile breakpoints: bottom nav or equivalent input-first chrome",
+            "Chat usable full-width on narrow viewports",
+            "Spells panel swipe/collapse without losing cast flow",
+            "file_exists: css/styles.css",
+            "source_match: css/styles.css /@media/",
+            "No cloud auth shell",
+          ],
+          checks: [
+            { kind: "file_exists", path: "css/styles.css" },
+            { kind: "file_exists", path: "index.html" },
+            { kind: "source_match", path: "css/styles.css", pattern: "@media" },
+            { kind: "lint", path: "js/app.js" },
+          ],
+        }),
+        step(8, {
+          title: "Settings panel JS wiring",
+          detail:
+            "Wire App Settings cards for vault path status, channel defaults, bus config. Roadmap card already opens engine; extend General/Spells/Tabs without breaking path gate.",
+          files: ["js/app.js", "index.html", "css/styles.css"],
+          status: "pending",
+          verification_slug: "sev-03-settings-wiring",
+          verification_dependencies: ["sev-03-mobile-layout"],
+          acceptance_criteria: [
+            "Settings panel interactive beyond roadmap card",
+            "Vault path / folder status visible from settings",
+            "Channel or bus defaults editable or clearly documented as future",
+            "source_match: js/app.js /openAppSettings|app-settings/",
+            "source_match: index.html /app-settings-panel/",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/app.js", pattern: "openAppSettings" },
+            { kind: "source_match", path: "index.html", pattern: "app-settings-panel" },
+            { kind: "source_match", path: "js/app.js", pattern: "data-settings-open|roadmap" },
+            { kind: "lint", path: "js/app.js" },
+          ],
+        }),
+        step(9, {
+          title: "Export Focus dossier",
+          detail:
+            "One-click markdown export per focus (exportFocusDossier baseline). Ensure full sealed channel dossier: messages, spells summary, vault path hint — download only, local.",
+          files: ["js/app.js", "js/intelligence.js"],
+          status: "in-progress",
+          verification_slug: "sev-03-export-dossier",
+          verification_dependencies: ["sev-03-settings-wiring"],
+          acceptance_criteria: [
+            "exportFocusDossier present and wired from UI",
+            "Export is client-side download (no upload)",
+            "source_match: js/app.js /exportFocusDossier/",
+            "lint: js/app.js",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/app.js", pattern: "exportFocusDossier" },
+            { kind: "lint", path: "js/app.js" },
+          ],
+        }),
+        step(10, {
+          title: "Self-recursive Focus",
+          detail:
+            "GRIMOIRE can spawn child focuses for sub-projects under a parent focus (folder/tag link). Local-only; no multiplayer sync. Child inherits path-gate rules.",
+          files: ["js/app.js", "js/data.js", "js/intelligence.js"],
+          status: "pending",
+          verification_slug: "sev-03-self-recursive-focus",
+          verification_dependencies: [
+            "sev-03-export-dossier",
+            "sev-01-dedupe-wizard-king",
+          ],
+          acceptance_criteria: [
+            "API or UI to spawn child focus linked to parent id/folder",
+            "Child is normal Focus (1 entity seal) with parent metadata",
+            "Path gate still applies per child",
+            "source_match: js/data.js /createConversation|makeFocusId|folderId/",
+            "No accounts / cloud multiplayer",
+          ],
+          checks: [
+            { kind: "source_match", path: "js/data.js", pattern: "makeFocusId|focusIdentityKey" },
+            { kind: "source_match", path: "js/app.js", pattern: "createConversation" },
+            { kind: "lint", path: "js/app.js" },
+            { kind: "lint", path: "js/data.js" },
+          ],
+        }),
+      ],
+    },
+  ];
+
+  const fileTargets = [
+    ...new Set(phases.flatMap((p) => p.steps.flatMap((s) => s.files || []))),
+  ];
+
+  return {
+    id: "rm-sovereign-evolution-canonical",
+    slug: SOVEREIGN_EVOLUTION_SLUG,
+    title: "GRIMOIRE Sovereign Evolution",
+    status: "in-progress",
+    source: "scroll-canonical",
+    canonical: true,
+    description: [
+      "One canonical self-evolution plan for the Grimoire app.",
+      "",
+      "**Doctrine:** SCROLL generates the plan. Grimoire executes and verifies.",
+      "**Constraints:** No cloud sync, no accounts, no external APIs. Local-first only.",
+      "",
+      "**Already live (baseline):**",
+      "- Auto-write-back loop (2a52f6b)",
+      "- /roadmap verify (620acad)",
+      "- Spell tag cards + detail modal + contribution metrics",
+      "- Per-focus vault + path gate",
+      "- Message Bus local relay",
+      "- SCROLL sovereign brain + auto-engagement",
+      "- X Recruitment Intake (489114c)",
+      "- Base44 SCROLL = separate track; BSB active (out of scope here)",
+      "",
+      "Every step carries verification_slug, acceptance_criteria, verification_dependencies.",
+      "Complete is gated: `/roadmap verify grimoire-sovereign-evolution` then mark steps complete.",
+    ].join("\n"),
+    createdAt: now,
+    updatedAt: now,
+    phases,
+    fileTargets,
+    iterations: [
+      {
+        at: now,
+        kind: "note",
+        detail:
+          "Canonical roadmap authored — SCROLL plan / Grimoire execute+verify. Local-first only.",
+      },
+    ],
+    path: `grimoire-local/roadmaps/${SOVEREIGN_EVOLUTION_SLUG}.md`,
+    rules: {
+      localOnly: true,
+      noCloudSync: true,
+      noAccounts: true,
+      noExternalApis: true,
+      syncRule: "SCROLL generates the plan. Grimoire executes and verifies.",
+    },
+  };
+}
+
+/**
+ * Ensure the canonical Sovereign Evolution roadmap exists once in state.
+ * Does not overwrite operator progress if slug already present.
+ */
+export function ensureSovereignEvolutionRoadmap(state) {
+  ensureRoadmapsState(state);
+  const existing = findRoadmapBySlug(state, SOVEREIGN_EVOLUTION_SLUG);
+  if (existing) {
+    if (!state.activeRoadmapSlug) state.activeRoadmapSlug = existing.slug;
+    return existing;
+  }
+  const rm = buildGrimoireSovereignEvolutionRoadmap();
+  state.roadmaps.push(rm);
+  state.activeRoadmapSlug = rm.slug;
+  return rm;
+}
+
 export function roadmapHelpText() {
   return [
     "### Roadmap Engine",
@@ -3703,6 +4099,7 @@ export function roadmapHelpText() {
     "",
     "**Commands**",
     "- `/roadmap <feature description>` — generate plan",
+    "- `/roadmap sovereign` — load **GRIMOIRE Sovereign Evolution** (canonical)",
     "- `/roadmap` + paste SCROLL markdown — parse structured plan",
     "- `/roadmap list` — list saved roadmaps",
     "- `/roadmap show [slug]` — show plan",
@@ -3712,13 +4109,14 @@ export function roadmapHelpText() {
     "- `/roadmap status [slug] in-progress|complete|blocked|pending`",
     "- `/roadmap open` — open Roadmap panel",
     "",
+    "**Sync rule:** SCROLL generates the plan. Grimoire executes and verifies.",
     "**Executable checks:** `file_exists` · `source_match` · `lint` · `vault_entry`",
     "**Gate:** steps cannot flip to complete without a passing `/roadmap verify`.",
     "**File targets:** `js/app.js`, `js/data.js`, `js/intelligence.js`, `index.html`, `css/styles.css`",
     "**Disk:** `GRIMOIRE-FocusIntelligence/grimoire-local/roadmaps/[slug].md`",
     "**CLI/hooks:** `node tools/roadmap-verify.mjs` · `tools/githooks/pre-commit`",
     "",
-    "_Does not modify vault covenant, spell system, bus routing, or path gate unless the plan explicitly requires it._",
+    "_Local-first only — no cloud sync, accounts, or external APIs._",
   ].join("\n");
 }
 
