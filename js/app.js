@@ -175,6 +175,13 @@ import {
   healthHudChip,
   healerHealthSpellHint,
 } from "./health.js?v=sovereign-evolution-1";
+import {
+  detectGap,
+  logPulse,
+  recordTeleportation,
+  enqueueBreathePrompts,
+  processBreatheCycle,
+} from "./pulse.js";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -2173,6 +2180,38 @@ async function deleteFocus(focusId) {
   persist();
   renderAll();
   toast(`Focus purged: ${label}`, "success");
+}
+
+// One-time: dedupe duplicate Wizard King focuses from legacy state
+try {
+  const dedupeKey = "grimoire-wizard-king-deduped-v1";
+  if (!localStorage.getItem(dedupeKey)) {
+    const wkConvos = (state.conversations || []).filter(
+      (c) => String(c?.name || "").trim().toLowerCase() === "wizard king"
+    );
+    if (wkConvos.length > 1) {
+      wkConvos.sort((a, b) => {
+        const aScore = (a?.messages?.length || 0) + (a?.pulseCount || 0) * 10;
+        const bScore = (b?.messages?.length || 0) + (b?.pulseCount || 0) * 10;
+        return bScore - aScore;
+      });
+      const keeper = wkConvos[0];
+      const removals = new Set(wkConvos.slice(1).map((c) => c.id));
+      state.conversations = state.conversations.filter(
+        (c) => !removals.has(c.id)
+      );
+      state.spells = (state.spells || []).filter(
+        (s) => !removals.has(s.conversationId)
+      );
+      if (removals.has(state.activeId)) {
+        state.activeId = keeper.id;
+      }
+      persist();
+    }
+    localStorage.setItem(dedupeKey, "1");
+  }
+} catch {
+  /* ignore */
 }
 
 /** Remove all cached traces of a Focus from localStorage/vault state. */

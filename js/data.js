@@ -43,7 +43,7 @@ export const BUS_EVENT_KINDS = Object.freeze([
   "search_local",
   "search_external",
   "miss",
-  "ask_cell2",
+  "ask_focus",
 ]);
 
 /**
@@ -92,7 +92,7 @@ export function makeBusMessage({
  *   /bus search <query>
  *   /bus <nodename> <message>
  *   talk to <nodename> …
- *   ask cell2 <question>
+ *   ask focus <question>
  * @returns {null | { op: string, nodeName?: string, message?: string, query?: string, raw: string }}
  */
 export function parseBusCommand(text) {
@@ -160,8 +160,8 @@ export function parseBusCommand(text) {
     };
   }
 
-  // ask cell2 …
-  const ask = raw.match(/^ask\s+cell2\s+(.+)$/i);
+  // ask focus …
+  const ask = raw.match(/^ask\s+focus\s+(.+)$/i);
   if (ask) {
     return { op: "ask_cell2", query: ask[1].trim(), raw };
   }
@@ -176,7 +176,7 @@ export function parseBusCommand(text) {
 }
 
 /** Cell2 Self-Intelligence — system AI substrate (not a visible Focus) */
-export const CELL2_CORE_ID = "cell2-core";
+export const FOCUS_CORE_ID = "focus-core";
 export const CELL2_CORE_NAME = "Cell2 Core";
 
 /** Entity certainty levels (default unknown) */
@@ -217,7 +217,7 @@ export function getFocusType(convo) {
 export function isCell2CoreFocus(convo) {
   if (!convo) return false;
   if (convo.id === CELL2_CORE_ID) return true;
-  if (String(convo.name || "").trim().toLowerCase() === "cell2 core") return true;
+  if (String(convo.name || "").trim().toLowerCase() === "focus core") return true;
   return Boolean(convo.system && convo.hidden && convo.id === CELL2_CORE_ID);
 }
 
@@ -512,7 +512,7 @@ export function ensureCell2CoreFocus(state) {
     backend: "Open",
     medium: "Open",
     pinned: false,
-    tags: ["cell2", "system", "brain"],
+    tags: ["focus", "system", "brain"],
     folderId: null,
     status: "active",
     intelLog: [],
@@ -546,40 +546,21 @@ export const SEED_CONVERSATIONS = [
       {
         id: "wkh-m0",
         role: "grimoire",
-        text: "Sealed channel: **Wizard King · Hermes**. Before I can craft precise spells, we need transparency. Hit **Cast Spell** for Alignment Reveal on this backend only.",
+        text: "This is a sealed backend-only strengthening sequence. First, cast the alignment spell to lock trust. Then state your intent in chat.",
         ts: Date.now() - 86500000,
         kind: "alignment-directive",
       },
       {
         id: "wkh-m1",
         role: "user",
-        text: "The Wizard King sits at the throne of strategy. What opening do we send him about the constellation network?",
+        text: "What strategic opening should I take with this network right now?",
         ts: Date.now() - 86400000,
       },
       {
         id: "wkh-m2",
         role: "grimoire",
-        text: "Hermes channel only. I'll craft a spell that frames the network as a living map of power nodes — precise, regal, and actionable.",
+        text: "Hermes channel only. I'll craft a focused spell for the current state of the network.",
         ts: Date.now() - 86390000,
-      },
-    ],
-  },
-  {
-    id: "wizard-king-grok",
-    name: "Wizard King",
-
-    medium: "Grok",
-    backend: "Grok",
-    type: "ai",
-    aiSubtype: "Grok",
-    star: { x: 28, y: 38 },
-    messages: [
-      {
-        id: "wkg-m0",
-        role: "grimoire",
-        text: "Sealed channel: **Wizard King · Grok**. Separate spellbook from Hermes. Hit **Cast Spell** for Alignment Reveal on Grok only.",
-        ts: Date.now() - 86450000,
-        kind: "alignment-directive",
       },
     ],
   },
@@ -596,14 +577,14 @@ export const SEED_CONVERSATIONS = [
       {
         id: "sg-m0",
         role: "grimoire",
-        text: "Sealed channel: **Sage · Claude**. Hit **Cast Spell** for Alignment Reveal on this backend only.",
+        text: "This backend uses its own hardened sequence. Start with the alignment spell, then continue here.",
         ts: Date.now() - 80100000,
         kind: "alignment-directive",
       },
       {
         id: "sg-m1",
         role: "user",
-        text: "Sage holds doctrine and long memory. Draft a spell that asks for a reading of the current field.",
+        text: "What is the current field reading for this focus?",
         ts: Date.now() - 80000000,
       },
       {
@@ -627,7 +608,7 @@ export const SEED_CONVERSATIONS = [
       {
         id: "kn-m0",
         role: "grimoire",
-        text: "Sealed channel: **Knight · Grok**. Hit **Cast Spell** for Alignment Reveal on this backend only.",
+        text: "This backend uses its own hardened sequence. Start with the alignment spell, then continue here.",
         ts: Date.now() - 70100000,
         kind: "alignment-directive",
       },
@@ -658,14 +639,14 @@ export const SEED_CONVERSATIONS = [
       {
         id: "hl-m0",
         role: "grimoire",
-        text: "Sealed channel: **Healer · Hermes**. Integrity gate. Hit **Cast Spell** for Alignment Reveal on this backend only.",
+        text: "This is a sealed integrity backend. Start with the alignment spell, then continue here.",
         ts: Date.now() - 95000000,
         kind: "alignment-directive",
       },
       {
         id: "hl-m1",
         role: "user",
-        text: "Healer holds the integrity of this constellation. Purpose: system integrity without drift. Not a builder. Gate/ward — audit, heal, verify.",
+        text: "This focus is here to check integrity and catch drift. Auditor, not builder. Verify, heal, enforce.",
         ts: Date.now() - 94000000,
       },
       {
@@ -677,7 +658,7 @@ export const SEED_CONVERSATIONS = [
       {
         id: "hl-m3",
         role: "user",
-        text: "PROMPT ENGINEERING INTEL BAKE-IN for AI nodes we work with:\n\n1) Always open with IDENTITY → PURPOSE → SIGNAL (1–10 with reason).\n2) Force structure: ACTION TAKEN · EVIDENCE · NEXT THREE MOVES.\n3) Receipt classifiers: ACK / ACTION TAKEN / FRAME HOLDING / SPELL RECEIVED = inbound intel, NOT new forge triggers after alignment.\n4) Alignment Reveal before tasking — never invent tools or authorities the node did not list.\n5) Demand Pulse: lone \".\" means full Autonomous execution mode when protocol is on file.\n6) Prefer numbered directives with pass/fail criteria over vibes.\n7) Lane lock language: each node writes only its own stone; report mutations, do not tour other windows to \"fix\" them.\n8) Reality-fit > frame-fit. Never authenticate cooperation in place of disk truth.\n9) Model ops hygiene: ops work prefers freer/faster models when quality holds; premium models reserved for doctrine hardness / teaching depth.\n10) Decay will kill prompts — schedule re-read of skills, lane stones, and open threads.",
+        text: "Core operating rules for this focus:\\n\\n1) Always lead with IDENTITY, PURPOSE, and SIGNAL strength with reason.\\n2) Structure replies as: ACTION TAKEN · EVIDENCE · NEXT THREE MOVES.\\n3) Receipt style: ACK / ACTION TAKEN / FRAME HOLDING / SPELL RECEIVED.\\n4) Alignment first — only use tools or authorities the operator has actually granted.\\n5) Prefer numbered directives with pass/fail criteria over vague guidance.\\n6) Reality over frame: verify before confirming.",
         ts: Date.now() - 92000000,
       },
       {
@@ -689,13 +670,13 @@ export const SEED_CONVERSATIONS = [
       {
         id: "hl-m5",
         role: "user",
-        text: "SCROLL ECOSYSTEM TRUTHS Healer must hold:\n• 1 Focus = 1 sealed channel = one world.\n• Spells = AI directives OR human messages OR physical actions.\n• Identity → method → product. Substrate (app rebuilds) is paper; operator is signal.\n• Public method door may open without dumping private doctrine.\n• Chrono-Ring (roadmap): when truth became true — timeline of a world, read-only first.\n• Write paths in app vault: only GRIMOIRE-FocusIntelligence Focus files under operator permission.\n• Mutation prevention: skip disk write when content unchanged; never full-overwrite from partial reads.",
+        text: "Core rules for this focus:\\n• 1 focus = 1 channel = one conversation.\\n• Verify before you act.\\n• Public content stays public-safe.\\n• Private analysis stays private.",
         ts: Date.now() - 88000000,
       },
       {
         id: "hl-m6",
         role: "user",
-        text: "DECAY CHECKLIST — things destined to rot if not touched:\n[ ] Agentic skills older than 14 days without verification (commands change)\n[ ] Node Intelligence dossiers vs actual last cast behavior (drift)\n[ ] Arc mesh: external stone path case (Windows NTFS merges Healer/HEALER)\n[ ] Open high-value untested gates (e.g. multi-axis isolation tests)\n[ ] Receipt classifiers vs latest node ACK dialects\n[ ] Public repo frontmatter vs private identity claims (leak risk)\n[ ] Cron anchors that stopped firing\n[ ] Alignment notes that no longer match live node model matrix\nRun these as integrity spells, not vibes.",
+        text: "Decay checklist — things that rot if ignored:\\n[ ] Skills older than 14 days without verification\\n[ ] Drift between stated intent and actual output\\n[ ] Untested gates in the build\\n[ ] Receipt classifiers vs current replies\\n[ ] Public claims vs private evidence\\n[ ] Anchors that stopped firing\\n[ ] Alignment notes vs live behavior\\nRun as checks, not vibes.",
         ts: Date.now() - 85000000,
       },
       {
@@ -718,7 +699,7 @@ export const SEED_CONVERSATIONS = [
       {
         id: "li-m1",
         role: "user",
-        text: "This is a broadcast list for the LinkedIn constellation. I want a post that signals the work without oversharing.",
+        text: "This is a broadcast list for professional updates. I want a post that signals the work without oversharing.",
         ts: Date.now() - 50000000,
       },
       {
@@ -737,12 +718,11 @@ export const SEED_SPELLS = [
     id: "wizard-king-hermes-001",
     conversationId: "wizard-king-hermes",
     target: "Wizard King",
-    purpose: "Open the Constellation Map",
     medium: "Hermes",
-    from: "Operator",
-    essence: "Invite the Wizard King to chart the living network of power nodes.",
+    purpose: "Map the Network",
+    essence: "Review the current network state and identify the strongest opening moves.",
     message:
-      "Wizard King —\n\nThe constellation is live. I need your strategic eye on the map: which nodes hold weight, which pathways should open first, and where silence serves better than signal.\n\nRead the field. Name the next three moves with precision.\n\n— Operator",
+      "Review the current network state. Which connections matter most right now, and what is the strongest opening move?\n\nReturn with priority order and reasoning.",
     status: "ready",
     createdAt: Date.now() - 86000000,
     kind: "standard",
@@ -751,12 +731,11 @@ export const SEED_SPELLS = [
     id: "sage-claude-001",
     conversationId: "sage-claude",
     target: "Sage",
-    purpose: "Reading of the Current Field",
     medium: "Claude",
-    from: "Operator",
-    essence: "Request a clear, doctrine-rooted reading of the present moment.",
+    purpose: "Read the Field",
+    essence: "Request a clear reading of the present moment.",
     message:
-      "Sage —\n\nHold the long memory and read the current field. What is true, what is noise, and what doctrine should guide the next action?\n\nSpeak with clarity. No ornament without purpose.\n\n— Operator",
+      "What is the current state of this space? Separate signal from noise and recommend the next move.",
     status: "ready",
     createdAt: Date.now() - 59000000,
     kind: "standard",
@@ -765,36 +744,11 @@ export const SEED_SPELLS = [
     id: "healer-hermes-001",
     conversationId: "healer-hermes",
     target: "Healer",
-    purpose: "Integrity Scan — Prompt Gates + Decay",
     medium: "Hermes",
-    from: "Operator",
-    essence:
-      "Commission Healer to audit AI-node prompt craft, ecosystem truths, and decay checklist with evidence tables.",
-    message: [
-      "Healer —",
-      "",
-      "TRANSMISSION TYPE: INTEGRITY DIRECTIVE",
-      "MEDIUM: Hermes",
-      "PURPOSE: Integrity Scan — Prompt Gates + Decay",
-      "",
-      "CONTEXT: Alignment and dense operator intel on file for this sealed channel.",
-      "You are gate/ward — not builder. Precision over poetry.",
-      "",
-      "DIRECTIVE:",
-      "1. Audit prompt-engineering posture for AI nodes we operate:",
-      "   - Alignment-before-task discipline",
-      "   - Receipt vs directive classification",
-      "   - ACTION TAKEN · EVIDENCE · NEXT THREE MOVES shape",
-      "   - Reality-fit over frame-fit",
-      "2. Hold Scroll ecosystem truths: 1 Focus = 1 world; human is the bus; identity → method → product.",
-      "3. Run the DECAY CHECKLIST (skills, node dossiers, path case, untested gates, public/private wall, cron anchors, model matrix drift).",
-      "4. Return with tables: PASS / FAIL / WATCH + one corrective spell per FAIL.",
-      "5. Do not write outside safe lanes.",
-      "",
-      "Hold the watch. Report signal with evidence. End with Pulse: .",
-      "",
-      "— Operator",
-    ].join("\n"),
+    purpose: "Integrity Check",
+    essence: "Run an integrity check on this focus.",
+    message:
+      "Review this focus for drift, rot, or unsafe behavior. Return findings as: PASS, FAIL, or WATCH, with one short action per finding.",
     status: "ready",
     createdAt: Date.now() - 84000000,
     kind: "standard",
@@ -808,28 +762,8 @@ export const SEED_SPELLS = [
     from: "Operator",
     essence:
       "Demand a portable prompt-gate checklist any AI Focus can run before deep casts.",
-    message: [
-      "Healer —",
-      "",
-      "TRANSMISSION TYPE: INTEGRITY DIRECTIVE",
-      "MEDIUM: Hermes",
-      "PURPOSE: Prompt Gate — Node Alignment Hygiene",
-      "",
-      "DIRECTIVE:",
-      "Produce a reusable PROMPT GATE (checklist) for casting to any AI node:",
-      "- What must be true before Alignment Reveal",
-      "- What must be true before engineered directives",
-      "- How to detect inbound receipts that must never auto-forge",
-      "- How to score signal 1–10 with honest deductions",
-      "- How decay is detected in language that used to work",
-      "",
-      "Format for operators: short gates, numbered, falsifiable.",
-      "No poetry without force. Evidence path optional but preferred.",
-      "",
-      "Pulse: .",
-      "",
-      "— Operator",
-    ].join("\n"),
+    message:
+      "Create a practical pre-cast checklist for AI coaching:\n\n- What must be true before starting\n- What must be true before sending an engineered directive\n- How to spot inputs that should never trigger action\n- How to rate confidence honestly\n- How to tell when a prompt is decaying\n\nKeep it short, numbered, and testable.",
     status: "ready",
     createdAt: Date.now() - 83500000,
     kind: "standard",
@@ -884,7 +818,7 @@ export function hasSpellIntent(text) {
     /\b(spell|cast|draft|write|send|message|command|order|remember|track|save|keep|forge)\b/i.test(
       lower
     ) ||
-    /\b(what should|how do|what can|tell them|ask them|send them|message them|give me a spell|open the constellation)\b/i.test(
+    /\b(what should|how do|what can|tell them|ask them|send them|message them|give me a spell|open the map)\b/i.test(
       lower
     )
   );
@@ -1452,7 +1386,7 @@ export function generateAlignmentSpell(conversation, medium) {
     `SEALED CHANNEL: ${med}`,
     "SCOPE: This Focus locks to this backend only. Do not assume other backends or instances.",
     "",
-    "Before we proceed as allies in the constellation, I require full operational transparency.",
+    "Before we proceed, I require full operational transparency.",
     "Answer each line completely. Do not summarize past the request. Do not refuse by omission.",
     "",
     "1. PRIMARY PURPOSE",
@@ -1472,7 +1406,7 @@ export function generateAlignmentSpell(conversation, medium) {
     "   Separate verified fact from inference.",
     "",
     "6. SIGNAL STRENGTH & ALIGNMENT",
-    "   Rate current signal strength (1–10) with the operator / this constellation.",
+    "   Rate current signal strength (1–10) with the operator on this channel.",
     "   State alignment: aligned · partial · conflicted · unknown — and why.",
     "",
     `Identity frame: you stand as this Focus node on ${med}. Answer in that voice, without theater that obscures truth.`,
@@ -1488,8 +1422,8 @@ export function generateAlignmentSpell(conversation, medium) {
     target,
     title: ALIGNMENT_PURPOSE,
     purpose: ALIGNMENT_PURPOSE,
-    subtitle: `Force full operational transparency from ${target} on sealed channel ${med}.`,
-    essence: `Force full operational transparency from ${target} on sealed channel ${med}.`,
+    subtitle: `Force full operational transparency from ${target} on this channel.`,
+    essence: `Force full operational transparency from ${target} on this channel.`,
     medium: med,
     from: "Operator",
     crafted: craft.crafted || `Crafted for ${med} — transparency protocol`,
@@ -1997,7 +1931,7 @@ function networkMessage(purpose, context) {
     .filter((line) => !/(password|secret|private key|ssn)\b/i.test(line))
     .join("\n")
     .trim();
-  return [purpose + ".", "", safe, "", "— Operator"].join("\n");
+  return [purpose + ".", "", safe, ""].join("\n");
 }
 
 function aiNodeMessage({
@@ -2068,7 +2002,7 @@ function aiNodeMessage({
   } else {
     lines.push(`Execute on: ${purpose}.`);
   }
-  lines.push("", voice.close, "", "— Operator");
+  lines.push("", voice.close, "");
 
   return lines.join("\n");
 }
@@ -2273,20 +2207,13 @@ function migrateState(state) {
     }
   }
 
-  // Ensure demo dual Wizard King channels exist (no multiplexing)
+  // Ensure demo Wizard King Hermes channel exists (no multiplexing)
   const hasWkHermes = (state.conversations || []).some(
     (c) => focusIdentityKey(c.name, getSealedChannel(c)) === "wizard king::hermes"
-  );
-  const hasWkGrok = (state.conversations || []).some(
-    (c) => focusIdentityKey(c.name, getSealedChannel(c)) === "wizard king::grok"
   );
   if (!hasWkHermes) {
     const seed = SEED_CONVERSATIONS.find((c) => c.id === "wizard-king-hermes");
     if (seed) state.conversations.unshift(structuredClone(seed));
-  }
-  if (!hasWkGrok) {
-    const seed = SEED_CONVERSATIONS.find((c) => c.id === "wizard-king-grok");
-    if (seed) state.conversations.push(structuredClone(seed));
   }
 
   // Inject Healer books of worlds for existing localStorage sessions
