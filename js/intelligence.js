@@ -25,6 +25,9 @@ import {
   normalizeCertainty,
   resolveBusChannel,
   makeBusMessage,
+  assertAiGovernance,
+  detectForbiddenAiAction,
+  isPurgeProtected,
 } from "./data.js";
 import { computeFocusHealth } from "./health.js";
 
@@ -2621,6 +2624,38 @@ export async function densenBusMessage(nodeOrFocus, message, opts = {}) {
   const body = String(message || opts.body || "").trim();
   if (!body) return { ok: false, method: "empty" };
 
+  // Governance: AI-sourced densen cannot smuggle git push / build / exec
+  const govSource = String(opts.source || opts.from || "user").toLowerCase();
+  const isOperator =
+    govSource === "user" ||
+    govSource === "operator" ||
+    govSource === "jacob" ||
+    govSource === "crown" ||
+    govSource === "grimoire";
+  if (!isOperator) {
+    const gate = assertAiGovernance(body, {
+      source: "ai",
+      actor: opts.from || name || "AI node",
+    });
+    if (!gate.allowed) {
+      pushBusActivity({
+        kind: "governance",
+        summary: `Blocked ${gate.action} from ${opts.from || "AI"}`,
+        nodeName: name,
+        channel,
+        localOnly: true,
+        detail: gate.reason,
+      });
+      return {
+        ok: false,
+        method: "governance",
+        blocked: true,
+        action: gate.action,
+        reason: gate.reason,
+      };
+    }
+  }
+
   const focusLike =
     typeof nodeOrFocus === "object" && nodeOrFocus
       ? nodeOrFocus
@@ -2672,6 +2707,364 @@ export async function densenBusMessage(nodeOrFocus, message, opts = {}) {
 }
 
 /**
+ * Autonomous /msg delivery densen — YAML frontmatter via auto-write loop.
+ * Used for AI-to-AI and self-message chains (no UI focus switch).
+ *
+ * @param {object} targetFocus - receiving focus
+ * @param {string} message - full body (never preview-only)
+ * @param {object} [opts]
+ * @returns {Promise<object>}
+ */
+export async function densenMsgDelivery(targetFocus, message, opts = {}) {
+  if (!targetFocus) return { ok: false, method: "empty" };
+  const body = String(message || opts.body || "").trim();
+  if (!body) return { ok: false, method: "empty" };
+
+  const from = String(opts.from || "user").trim() || "user";
+  const source = String(opts.source || from).trim() || from;
+  const kind = String(opts.kind || "msg").trim() || "msg";
+  const channel =
+    opts.channel || getSealedChannel(targetFocus) || resolveBusChannel(targetFocus);
+  const self = Boolean(opts.self || from === targetFocus.name);
+
+  // Governance on AI-originated msg payloads
+  const srcLower = source.toLowerCase();
+  const operatorSources = new Set([
+    "user",
+    "operator",
+    "jacob",
+    "crown",
+    "grimoire",
+  ]);
+  if (!operatorSources.has(srcLower) && srcLower !== "self-loop") {
+    const gate = assertAiGovernance(body, {
+      source: "ai",
+      actor: from,
+    });
+    if (!gate.allowed) {
+      pushBusActivity({
+        kind: "governance",
+        summary: `Blocked ${gate.action} via /msg from ${from}`,
+        nodeName: targetFocus.name,
+        channel,
+        localOnly: true,
+        detail: gate.reason,
+      });
+      return {
+        ok: false,
+        method: "governance",
+        blocked: true,
+        action: gate.action,
+        reason: gate.reason,
+      };
+    }
+  }
+  // Self-loop still cannot smuggle forbidden verbs
+  if (srcLower === "self-loop") {
+    const forbidden = detectForbiddenAiAction(body);
+    if (forbidden) {
+      const gate = assertAiGovernance(forbidden, {
+        source: "ai",
+        actor: from,
+      });
+      return {
+        ok: false,
+        method: "governance",
+        blocked: true,
+        action: forbidden,
+        reason: gate.reason,
+      };
+    }
+  }
+
+  const header = self
+    ? `**Autonomous self-message** · ${kind}`
+    : `**Autonomous /msg** · ${kind}`;
+  const vaultBody = [
+    header,
+    `To: **${targetFocus.name}** · Channel: **${channel}** · From: **${from}**`,
+    opts.loopIteration != null
+      ? `Loop iteration: **${opts.loopIteration}**`
+      : null,
+    ``,
+    body,
+  ]
+    .filter((l) => l != null)
+    .join("\n");
+
+  const result = await autoWriteFocusIntelligence(targetFocus, {
+    body: vaultBody,
+    source: source === "self-loop" ? from : source,
+    category: opts.category || "relationship",
+    certainty: opts.certainty || "inferred",
+    tags: [
+      "msg",
+      kind,
+      self ? "self-message" : "ai-to-ai",
+      "auto-write",
+      channel,
+    ].filter(Boolean),
+    focusId: targetFocus.id,
+    refreshScroll: true,
+  });
+
+  pushBusActivity({
+    kind: kind === "msg-loop" ? "msg-loop" : "msg",
+    summary: self
+      ? `Self-msg · **${targetFocus.name}**: ${body.slice(0, 100)}`
+      : `/msg **${from}** → **${targetFocus.name}**: ${body.slice(0, 100)}`,
+    nodeName: targetFocus.name,
+    channel,
+    localOnly: true,
+    detail: body.slice(0, 500),
+  });
+
+  scheduleScrollListCurate({ immediate: false });
+  return { ok: true, result, self, channel };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Session0 fleet response consolidation
+// Responses flow: fleet sessions → Session0 → GRIMOIRE → focus vault
+// Local-first. No inbox watchers. No per-session HTTP. Jacob is the crown.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Parse a Session0 consolidated multi-session response into per-session blocks.
+ * Recognizes:
+ *   ### Response from <session>
+ *   ## Response from <session>
+ *   **From <session>:**
+ *   [session: <id>]
+ *   --- session: <id> ---
+ *
+ * @param {string} text
+ * @returns {{ sessions: Array<{session:string, body:string}>, isConsolidated: boolean, raw: string }}
+ */
+export function parseSession0FleetResponse(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return { sessions: [], isConsolidated: false, raw: "" };
+  }
+
+  const sessions = [];
+  // Split on heading-style session markers
+  const marker =
+    /(?:^|\n)(?:#{1,3}\s*Response\s+from\s+([^\n#]+)|#{1,3}\s*From\s+([^\n#]+)|(?:\*\*)?From\s+([^*\n:]+)(?:\*\*)?\s*:|\[session\s*:\s*([^\]]+)\]|---\s*session\s*:\s*([^\n-]+)\s*---)/gi;
+
+  const matches = [];
+  let m;
+  while ((m = marker.exec(raw)) !== null) {
+    const session = String(
+      m[1] || m[2] || m[3] || m[4] || m[5] || ""
+    )
+      .trim()
+      .replace(/\*+/g, "")
+      .replace(/^\*\*|\*\*$/g, "");
+    if (!session) continue;
+    matches.push({ index: m.index + (m[0].startsWith("\n") ? 1 : 0), end: marker.lastIndex, session });
+  }
+
+  if (matches.length === 0) {
+    // Single blob — treat as Session0 consolidated whole if doctrine language present
+    const looksFleet =
+      /session0|consolidated|fleet|response from/i.test(raw) &&
+      raw.length > 40;
+    return {
+      sessions: looksFleet
+        ? [{ session: "Session0", body: raw }]
+        : [{ session: "Session0", body: raw }],
+      isConsolidated: looksFleet || raw.length > 0,
+      raw,
+    };
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    const next = matches[i + 1];
+    // Body starts after the marker line
+    const afterMarker = raw.indexOf("\n", cur.end);
+    const start = afterMarker === -1 ? cur.end : afterMarker + 1;
+    const end = next ? next.index : raw.length;
+    const body = raw.slice(start, end).trim();
+    sessions.push({
+      session: cur.session,
+      body: body || "_(empty block)_",
+    });
+  }
+
+  return {
+    sessions,
+    isConsolidated: sessions.length >= 1,
+    raw,
+  };
+}
+
+/**
+ * Build a focus-intelligence densen body from consolidated Session0 reply.
+ */
+export function formatSession0ConsolidatedIntel(parsed, opts = {}) {
+  const spellTitle = String(opts.spellTitle || "Spell").trim();
+  const focusName = String(opts.focusName || "Focus").trim();
+  const sessions = parsed?.sessions || [];
+  const lines = [
+    `**Session0 fleet response · consolidated**`,
+    `Focus: **${focusName}**`,
+    `Spell: **${spellTitle}**`,
+    `Sessions: **${sessions.length}**`,
+    `Orchestrator: **Session0**`,
+    ``,
+    `> GRIMOIRE waits for consolidated response from Session0.`,
+    `> Individual Hermes sessions are not messaged directly.`,
+    ``,
+  ];
+  if (!sessions.length) {
+    lines.push(String(parsed?.raw || "").slice(0, 12000) || "_(empty)_");
+  } else {
+    for (const s of sessions) {
+      lines.push(`### Response from ${s.session}`, ``, s.body, ``);
+    }
+  }
+  lines.push(`---`, `the scroll never forgets. the saint always remembers.`);
+  return lines.join("\n");
+}
+
+/**
+ * Consolidate Session0 multi-session response into focus intelligence (auto-write-back).
+ * Optionally mirrors per-session slices onto fleet focuses that share linkedSession.
+ *
+ * @param {object} focus - primary densen target (usually spell owner)
+ * @param {string} text - Session0 consolidated reply (paste)
+ * @param {object} [opts]
+ * @param {object} [opts.spell]
+ * @param {array} [opts.conversations] - for fleet fan-out densen
+ * @returns {Promise<object>}
+ */
+export async function consolidateSession0FleetResponse(focus, text, opts = {}) {
+  if (!focus) return { ok: false, method: "empty" };
+  const body = String(text || opts.body || "").trim();
+  if (!body) return { ok: false, method: "empty" };
+
+  const parsed = parseSession0FleetResponse(body);
+  const spellTitle = String(
+    opts.spellTitle ||
+      opts.spell?.title ||
+      opts.spell?.purpose ||
+      "Fleet spell"
+  ).trim();
+  const intelBody = formatSession0ConsolidatedIntel(parsed, {
+    spellTitle,
+    focusName: focus.name || "Focus",
+  });
+
+  const result = await autoWriteFocusIntelligence(focus, {
+    body: intelBody,
+    source: opts.source || "Session0",
+    category: opts.category || "node_intel",
+    certainty: opts.certainty || "confirmed",
+    tags: [
+      "session0",
+      "fleet",
+      "consolidated",
+      "auto-write",
+      "orchestrator",
+      opts.spell?.kind || "spell",
+    ].filter(Boolean),
+    focusId: focus.id,
+    refreshScroll: true,
+  });
+
+  // Mirror per-session slices to matching fleet focuses (local densen only)
+  const conversations = Array.isArray(opts.conversations) ? opts.conversations : [];
+  const mirrored = [];
+  if (conversations.length && parsed.sessions.length) {
+    for (const block of parsed.sessions) {
+      const sess = String(block.session || "").trim().toLowerCase();
+      if (!sess || sess === "session0") continue;
+      const match = conversations.find((c) => {
+        if (!c || isCell2CoreFocus(c) || !isVisibleFocus(c)) return false;
+        const ls = String(c.linkedSession || "").trim().toLowerCase();
+        if (!ls) return false;
+        return (
+          ls === sess ||
+          ls.includes(sess) ||
+          sess.includes(ls) ||
+          String(c.name || "").toLowerCase() === sess
+        );
+      });
+      if (!match) continue;
+      try {
+        await autoWriteFocusIntelligence(match, {
+          body: [
+            `**Fleet slice via Session0**`,
+            `From session: **${block.session}**`,
+            `Spell: **${spellTitle}**`,
+            ``,
+            block.body,
+          ].join("\n"),
+          source: "Session0",
+          category: "node_intel",
+          certainty: "inferred",
+          tags: ["session0", "fleet-slice", "auto-write", block.session],
+          focusId: match.id,
+          refreshScroll: false,
+        });
+        mirrored.push({ focusId: match.id, session: block.session });
+      } catch (err) {
+        console.warn("[session0] fleet slice densen failed", err);
+      }
+    }
+  }
+
+  pushBusActivity({
+    kind: "session0-consolidate",
+    summary: `Session0 consolidated · **${focus.name}** · ${parsed.sessions.length} session block(s)`,
+    nodeName: focus.name,
+    channel: getSealedChannel(focus),
+    localOnly: true,
+    detail: intelBody.slice(0, 500),
+  });
+
+  scheduleScrollListCurate({ immediate: false });
+  return {
+    ok: true,
+    result,
+    parsed,
+    mirrored,
+    sessionCount: parsed.sessions.length,
+  };
+}
+
+/**
+ * Refuse auto-delete of purge-protected focuses (governance helper).
+ * Operator manual purge is still allowed at the app layer with force.
+ */
+export function refuseAutoPurge(focus, { source = "ai" } = {}) {
+  if (!focus) return { refused: false };
+  if (!isPurgeProtected(focus)) return { refused: false };
+  const src = String(source || "ai").toLowerCase();
+  if (src === "operator" || src === "jacob" || src === "user" || src === "crown") {
+    return { refused: false, protected: true };
+  }
+  console.error(
+    "[governance] refuseAutoPurge — blocked auto-delete of purgeProtected focus:",
+    focus.name,
+    focus.id,
+    "source=",
+    source
+  );
+  return {
+    refused: true,
+    protected: true,
+    reason: [
+      `**Purge blocked** · **${focus.name}** is operator-critical (\`purgeProtected\`).`,
+      `No AI may auto-delete Wizard King, SCROLL, GRIMOIRE, YOU, or Jacob-linked focuses.`,
+      `**Jacob is the crown.**`,
+    ].join("\n"),
+  };
+}
+
+/**
  * Local vault search only (no network). Scans SCROLL names + in-memory intel snippets.
  */
 export async function searchBusLocal(query, conversations = []) {
@@ -2717,43 +3110,60 @@ export async function searchBusLocal(query, conversations = []) {
 
 /**
  * Relay structured intel from source Focus into dest session (local only).
- * Returns markdown snippet for chat injection — densens into dest vault too.
+ * Returns markdown for chat + densens into dest vault.
+ *
+ * FULL BODY RULE (sev-01-bus-relay-full-body):
+ * Vault / densen writes must never truncate payload, Purpose lines, or intel
+ * content. Display summaries may truncate; intelligence.md never uses preview mode.
+ * Do not wrap payloads in `_italics_` — trailing underscore was truncating Purpose.
  */
 export async function relayIntelBetweenFocuses(sourceFocus, destFocus, hint = "") {
   if (!sourceFocus || !destFocus) return { ok: false, text: "" };
   const bits = [];
   const channel = getSealedChannel(sourceFocus);
+  const fullHint = String(hint || "").trim();
   bits.push(`### Relay from **${sourceFocus.name}** · ${channel}`);
+  // Full alignment notes — no slice
   if (sourceFocus.alignmentNotes) {
-    bits.push(String(sourceFocus.alignmentNotes).slice(0, 600));
+    bits.push(String(sourceFocus.alignmentNotes));
   }
+  // Full recent intel entries — no body slice
   const log = Array.isArray(sourceFocus.intelLog) ? sourceFocus.intelLog : [];
-  const recent = log.slice(-5);
+  const recent = log.slice(-12);
   for (const e of recent) {
+    const content = String(e.content || e.body || "");
     bits.push(
-      `- [${e.category || "intel"} · ${e.certainty || "unknown"}] ${String(e.content || "").slice(0, 200)}`
+      `- [${e.category || "intel"} · ${e.certainty || "unknown"}] ${content}`
     );
   }
-  if (hint) bits.push(`_Hint: ${String(hint).slice(0, 200)}_`);
+  // Full message payload (Purpose, body, everything) — never preview / never _wrap_
+  if (fullHint) {
+    bits.push(``);
+    bits.push(`### Message payload (full)`);
+    bits.push(fullHint);
+  }
   if (bits.length < 2) {
-    bits.push("_No densened intelligence on file yet for this node._");
+    bits.push("No densened intelligence on file yet for this node.");
   }
   const text = bits.join("\n");
+  // Vault write: full text only
   await appendEntityIntelligence(destFocus, {
     body: text,
     source: "Cell2",
     category: "relationship",
     certainty: "inferred",
-    tags: ["bus", "relay", sourceFocus.name],
+    tags: ["bus", "relay", "full-body", sourceFocus.name],
   });
   pushBusActivity({
     kind: "relay",
-    summary: `Relay **${sourceFocus.name}** → **${destFocus.name}**`,
+    summary: `Relay **${sourceFocus.name}** → **${destFocus.name}** (${fullHint.length || text.length} chars full body)`,
     nodeName: sourceFocus.name,
     channel,
     localOnly: true,
+    // Activity log may summarize; vault already has full body
+    detail: fullHint || text,
   });
-  return { ok: true, text };
+  return { ok: true, text, fullBody: true };
 }
 
 /**
