@@ -206,7 +206,7 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=session0-fleet-1";
+} from "./intelligence.js?v=focus-hygiene-2";
 import {
   computeFocusHealth,
   healthHudChip,
