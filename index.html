@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/styles.css?v=sovereign-evolution-1" />
+  <link rel="stylesheet" href="css/styles.css?v=focus-hygiene-1" />
 </head>
 <body>
   <!-- WORLD: full-viewport universe canvas (z-index 0; .app is transparent over it) -->
@@ -98,6 +98,22 @@
           </div>
         </div>
         <div class="header-controls">
+          <label
+            class="chat-relay-toggle"
+            id="chat-relay-toggle"
+            hidden
+            title="OFF = chat stays local to GRIMOIRE. ON = also copy messages to clipboard for pasting into Hermes. Manual paste only — no auto-delivery."
+          >
+            <input type="checkbox" id="chat-relay-input" aria-describedby="chat-relay-label" aria-label="Relay chat to linked Hermes session" />
+            <span class="chat-relay-switch" aria-hidden="true">
+              <span class="chat-relay-knob"></span>
+            </span>
+            <span class="chat-relay-text">
+              <span class="chat-relay-label" id="chat-relay-label">Relay to Session0</span>
+              <span class="chat-relay-hint" id="chat-relay-hint">clipboard only</span>
+            </span>
+            <span class="chat-relay-active-dot" aria-hidden="true" title="Relay active"></span>
+          </label>
           <div class="sealed-channel-badge" id="sealed-channel-badge" title="Sealed channel — one Focus, one receiver">
             <span class="label">Channel</span>
             <span class="sealed-value" id="sealed-channel-value">—</span>
@@ -119,9 +135,6 @@
           </button>
           <button type="button" class="btn-icon" id="btn-copy-scroll-list" title="Copy SCROLL List — one-click Focus transfer" aria-label="Copy SCROLL List">
             <span aria-hidden="true">⎘</span>
-          </button>
-          <button type="button" class="btn-icon danger" id="btn-purge-focus" title="Healer purge — true annihilation, no tombstone, no history" aria-label="Purge Focus">
-            <span aria-hidden="true">✕</span>
           </button>
           <button type="button" class="btn-icon" id="btn-open-gallery" title="Eternal Visual Gallery — every captured image for this Focus" aria-label="Open Image Gallery">
             <span aria-hidden="true">🖼</span>
@@ -194,23 +207,35 @@
     <aside class="spells-panel" id="spells-panel">
       <header class="spells-header">
         <div class="spells-title-wrap">
-          <button type="button" class="spells-title-btn" id="btn-spells-title" aria-haspopup="menu" aria-expanded="false" title="Spell options">
+          <button
+            type="button"
+            class="spells-title-btn"
+            id="btn-spells-title"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            title="Spellbook options"
+            aria-label="Spells menu"
+          >
             Spells
-            <span class="spells-title-caret" aria-hidden="true">▾</span>
           </button>
           <div class="spells-title-menu" id="spells-title-menu" role="menu" hidden>
             <button type="button" class="spells-title-menu-item" role="menuitem" id="btn-craft-complex-spell" data-action="craft-complex">
               Craft complex spell
             </button>
+            <button type="button" class="spells-title-menu-item" role="menuitem" id="btn-copy-spellbook" data-action="copy-spellbook">
+              Copy spellbook
+            </button>
           </div>
         </div>
         <div class="spells-header-actions">
+          <button type="button" class="btn-clear-all" id="btn-clear-active" title="Clear uncast active spells only — Cast History kept" aria-label="Clear Active spells">
+            Clear Active
+          </button>
           <button type="button" class="btn-icon subtle" id="btn-close-spells" title="Collapse panel" aria-label="Collapse Spells panel">›</button>
         </div>
       </header>
       <div class="spell-view-tabs" role="tablist" aria-label="Spell views">
         <button type="button" class="spell-view-tab active" id="tab-spells-active" data-view="active" role="tab" aria-selected="true">Active</button>
-        <button type="button" class="spell-view-tab" id="tab-spells-library" data-view="library" role="tab" aria-selected="false">Library</button>
         <button type="button" class="spell-view-tab" id="tab-spells-history" data-view="history" role="tab" aria-selected="false">Cast History</button>
       </div>
       <p class="spells-hint" id="spells-hint">Tap a spell card to copy (seals the cast). Paste the reply into chat to densen, then Cast Spell for the next true priority.</p>
@@ -367,19 +392,36 @@
     </div>
   </div>
 
-  <!-- Cell2 BRAIN — system intelligence substrate log (read-only UI) -->
-  <div id="brain-overlay" class="atlas-overlay brain-overlay" hidden role="dialog" aria-label="Cell2 Brain">
-    <div class="atlas-modal brain-modal">
+  <!-- BRAIN — Fleet Command orchestrator + Cell2 substrate -->
+  <div id="brain-overlay" class="atlas-overlay brain-overlay" hidden role="dialog" aria-label="Fleet Command BRAIN">
+    <div class="atlas-modal brain-modal fleet-brain-modal">
       <header class="atlas-header">
-        <strong id="brain-title">🧠 Cell2 Core — BRAIN</strong>
+        <strong id="brain-title">BRAIN · Fleet Command</strong>
         <button type="button" class="atlas-close" id="btn-brain-close" title="Close" aria-label="Close Brain">×</button>
       </header>
-      <p class="atlas-sub" id="brain-sub">System substrate · cell2-core/intelligence.md · append-only YAML entries</p>
+      <p class="atlas-sub" id="brain-sub">the scroll never forgets. the saint always remembers.</p>
+      <div class="fleet-mission-bar">
+        <input
+          type="text"
+          id="fleet-mission-input"
+          class="fleet-mission-input"
+          placeholder="Mission · deploy integrity to Healer · msg Wizard King: status · autonomous on"
+          autocomplete="off"
+          aria-label="Fleet mission"
+        />
+        <button type="button" class="btn-primary btn-fleet-mission" id="btn-fleet-mission" title="Route mission">
+          Route
+        </button>
+        <label class="fleet-auto-toggle" title="Autonomous mode — spells deploy on triggers without UI input">
+          <input type="checkbox" id="fleet-autonomous-toggle" />
+          <span>Autonomous</span>
+        </label>
+      </div>
       <div class="atlas-body brain-body" id="brain-body">
-        <p class="brain-empty">Loading Cell2 intelligence…</p>
+        <p class="brain-empty">Loading fleet…</p>
       </div>
       <footer class="atlas-foot">
-        <span class="atlas-economy">read-only · writes via chat / Cast Spell on any Focus</span>
+        <span class="atlas-economy">Jacob is the crown · AIs deliver text only · no app mutations</span>
       </footer>
     </div>
   </div>
@@ -414,6 +456,34 @@
           <option value="Custom">Custom</option>
         </select>
       </label>
+
+      <label>
+        Linked session <span class="field-optional">(Hermes id/name)</span>
+        <input
+          type="text"
+          id="edit-linked-session"
+          name="linked-session"
+          placeholder="existing session id or name"
+          autocomplete="off"
+        />
+      </label>
+      <div class="hermes-send-row" id="edit-hermes-send-row" hidden>
+        <input
+          type="text"
+          id="edit-session-message"
+          class="hermes-send-input"
+          placeholder="Message…"
+          autocomplete="off"
+          aria-label="Message to linked session"
+        />
+        <button type="button" class="btn-primary" id="btn-send-session" title="Send to linked session">
+          Send
+        </button>
+        <span class="hermes-delivery-status" id="edit-delivery-status" data-status="idle">idle</span>
+      </div>
+
+      <p class="modal-hint">Links an existing Hermes session only. Grimoire does not create or open sessions.</p>
+
       <div class="modal-actions">
         <button type="button" class="btn-secondary" id="btn-cancel-edit">Cancel</button>
         <button type="submit" class="btn-primary">Update</button>
@@ -520,7 +590,7 @@
   <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=sovereign-evolution-1"></script>
+  <script type="module" src="js/app.js?v=focus-hygiene-1"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -739,6 +809,11 @@
         if (!window.__grimoireAppReady) {
           console.warn("[grimoire] app module not ready — emergency sidebar paint");
           paintSidebarEmergency();
+          // Surface boot failure so it is not a silent black hole
+          var title = document.getElementById("entity-name");
+          if (title && title.textContent === "Select a focus") {
+            title.textContent = "Booting…";
+          }
         }
       }, 1200);
       // Also paint soon if list still empty
@@ -746,6 +821,19 @@
         var list = document.getElementById("convo-list");
         if (list && !list.querySelector(".convo-item")) paintSidebarEmergency();
       }, 2500);
+      // If still not ready after 4s, hard-hint hard refresh (stale module cache)
+      setTimeout(function () {
+        if (window.__grimoireAppReady) return;
+        console.error("[grimoire] module failed to boot — hard refresh (Ctrl+Shift+R)");
+        var empty = document.getElementById("empty-state");
+        if (empty) {
+          empty.innerHTML =
+            '<div class="empty-glyph">⚠</div>' +
+            "<p><strong>Grimoire module did not load.</strong></p>" +
+            '<p class="empty-hint">Press <strong>Ctrl+Shift+R</strong> (hard refresh) to clear stale cache. ' +
+            "If it persists, open DevTools → Console and report the red error.</p>";
+        }
+      }, 4000);
     })();
   </script>
 </body>

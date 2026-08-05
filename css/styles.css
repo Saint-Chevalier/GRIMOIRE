@@ -2256,17 +2256,18 @@ body.universe-view-active {
   /* keep sidebar + other focuses fully clickable; gate is not a modal trap */
 }
 
-/* Row action strip: pin · tags · export · delete */
+/* Row action strip: pin · tags · export · delete — always visible (not hover-only) */
 .focus-row-actions {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 1px;
-  padding: 4px 3px 4px 0;
-  opacity: 0;
+  gap: 2px;
+  padding: 4px 4px 4px 0;
+  opacity: 0.85;
   transition: opacity 150ms;
   z-index: 2;
+  flex-shrink: 0;
 }
 
 .convo-item:hover .focus-row-actions,
@@ -2277,14 +2278,14 @@ body.universe-view-active {
 
 .focus-action-btn,
 .convo-item .focus-delete-btn {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.3);
-  color: rgba(255, 255, 255, 0.45);
-  font-size: 10px;
-  line-height: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+  line-height: 20px;
   text-align: center;
   padding: 0;
   cursor: pointer;
@@ -2303,10 +2304,33 @@ body.universe-view-active {
   background: rgba(240, 215, 140, 0.12);
 }
 
+.convo-item .focus-delete-btn {
+  color: rgba(255, 160, 160, 0.75);
+  border-color: rgba(220, 80, 80, 0.35);
+}
+
 .convo-item .focus-delete-btn:hover {
-  background: rgba(220, 50, 50, 0.45);
-  border-color: rgba(220, 50, 50, 0.75);
+  background: rgba(220, 50, 50, 0.5);
+  border-color: rgba(220, 50, 50, 0.85);
   color: #fff;
+}
+
+.convo-channel {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(180, 175, 220, 0.45);
+  margin-top: 1px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 11rem;
+}
+
+.convo-item.active .convo-channel {
+  color: rgba(200, 195, 240, 0.65);
 }
 
 .convo-name-row {
@@ -2588,6 +2612,164 @@ body.universe-view-active {
   position: relative;
   z-index: 6;
   pointer-events: auto;
+}
+
+/* ─── Chat relay toggle (clipboard → Hermes paste) ─── */
+.chat-relay-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.28rem 0.55rem 0.28rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(161, 161, 170, 0.28);
+  background: rgba(10, 10, 14, 0.55);
+  cursor: pointer;
+  user-select: none;
+  max-width: 14rem;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.chat-relay-toggle[hidden] {
+  display: none !important;
+}
+
+.chat-relay-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.chat-relay-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 1.7rem;
+  height: 0.95rem;
+  border-radius: 999px;
+  background: rgba(63, 63, 70, 0.9);
+  border: 1px solid rgba(161, 161, 170, 0.35);
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.chat-relay-knob {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: #d4d4d8;
+  transform: translateY(-50%);
+  transition: left 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.chat-relay-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.chat-relay-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #e4e4e7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 10rem;
+}
+
+.chat-relay-hint {
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: var(--text-dim);
+}
+
+.chat-relay-active-dot {
+  flex-shrink: 0;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+/* Active visual indicator — gold/green pulse when relay is ON */
+.chat-relay-toggle.is-active,
+.chat-relay-toggle:has(input:checked) {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: linear-gradient(
+    135deg,
+    rgba(52, 211, 153, 0.12),
+    rgba(250, 250, 250, 0.03)
+  );
+  box-shadow: 0 0 14px rgba(52, 211, 153, 0.18);
+}
+
+.chat-relay-toggle.is-active .chat-relay-switch,
+.chat-relay-toggle:has(input:checked) .chat-relay-switch {
+  background: rgba(52, 211, 153, 0.45);
+  border-color: rgba(52, 211, 153, 0.7);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.35);
+}
+
+.chat-relay-toggle.is-active .chat-relay-knob,
+.chat-relay-toggle:has(input:checked) .chat-relay-knob {
+  left: calc(100% - 0.7rem - 2px);
+  background: #ecfdf5;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.55);
+}
+
+.chat-relay-toggle.is-active .chat-relay-label,
+.chat-relay-toggle:has(input:checked) .chat-relay-label {
+  color: #a7f3d0;
+}
+
+.chat-relay-toggle.is-active .chat-relay-hint,
+.chat-relay-toggle:has(input:checked) .chat-relay-hint {
+  color: rgba(167, 243, 208, 0.75);
+}
+
+.chat-relay-toggle.is-active .chat-relay-active-dot,
+.chat-relay-toggle:has(input:checked) .chat-relay-active-dot {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.85);
+  animation: chat-relay-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes chat-relay-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
+}
+
+.chat-relay-toggle:focus-within {
+  outline: none;
+  border-color: rgba(167, 139, 250, 0.55);
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+}
+
+.chat-relay-toggle.is-active:focus-within {
+  border-color: rgba(52, 211, 153, 0.7);
+  box-shadow:
+    0 0 0 2px rgba(52, 211, 153, 0.18),
+    0 0 14px rgba(52, 211, 153, 0.18);
 }
 
 /* Spells reopen control must stay clickable when panel is collapsed */
@@ -3594,17 +3776,23 @@ body.universe-view-active .message.system {
 .spells-title-wrap {
   position: relative;
   min-width: 0;
+  z-index: 5;
 }
 
 .spells-title-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.15rem 0.35rem 0.15rem 0;
+  padding: 0.15rem 0.4rem 0.15rem 0;
   border: none;
   background: transparent;
   cursor: pointer;
   border-radius: var(--radius-sm);
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  color: var(--gold);
 }
 
 .spells-title-btn:hover,
@@ -3613,28 +3801,120 @@ body.universe-view-active .message.system {
   text-shadow: 0 0 12px rgba(240, 215, 140, 0.35);
 }
 
-.spells-title-caret {
-  font-size: 0.65rem;
-  opacity: 0.7;
-  transition: transform 150ms ease;
+.spells-title-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(240, 215, 140, 0.35);
 }
 
-.spells-title-btn.open .spells-title-caret {
-  transform: rotate(180deg);
+/* ─── Spells expanded detail list (audit view) ─── */
+.spells-list.spells-list-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.35rem 0.55rem 0.85rem;
+  min-height: 0;
+  flex: 1;
+}
+
+.spell-detail-block {
+  flex-shrink: 0;
+  padding: 0.7rem 0.55rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.spell-detail-block:last-child {
+  border-bottom: none;
+  padding-bottom: 1rem;
+}
+
+.spell-detail-block-head {
+  margin-bottom: 0.5rem;
+}
+
+.spell-detail-block-index {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.2rem;
+}
+
+.spell-detail-block-title {
+  font-family: var(--font-display);
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: rgba(245, 230, 168, 0.95);
+  margin: 0 0 0.4rem;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.spell-detail-block-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.spell-detail-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.62rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(161, 161, 170, 0.25);
+  background: rgba(0, 0, 0, 0.25);
+  color: #e4e4e7;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spell-detail-meta-chip .k {
+  font-size: 0.55rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.spell-detail-block-body {
+  margin: 0;
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(226, 232, 240, 0.92);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.spells-panel.spell-list-detail .spells-list {
+  /* ensure panel body scrolls as a unit */
+  flex: 1 1 auto;
 }
 
 .spells-title-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
-  z-index: 20;
-  min-width: 11.5rem;
-  padding: 0.3rem;
+  z-index: 30;
+  min-width: 12.5rem;
+  padding: 0.35rem;
   border-radius: 10px;
   border: 1px solid rgba(180, 170, 255, 0.28);
-  background: rgba(8, 8, 16, 0.96);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(10px);
+  background: rgba(8, 8, 16, 0.98);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
 }
 
 .spells-title-menu[hidden] {
@@ -3645,7 +3925,7 @@ body.universe-view-active .message.system {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 0.5rem 0.65rem;
+  padding: 0.55rem 0.7rem;
   border: none;
   border-radius: 7px;
   background: transparent;
@@ -3660,6 +3940,12 @@ body.universe-view-active .message.system {
   background: rgba(167, 139, 250, 0.18);
   color: #fff;
 }
+
+.spells-title-menu-item + .spells-title-menu-item {
+  margin-top: 0.1rem;
+}
+
+
 
 .spells-list {
   min-height: 0;
@@ -3680,12 +3966,20 @@ body.universe-view-active .message.system {
   padding: 0.25rem 0.45rem;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
   transition: color var(--transition), border-color var(--transition), background var(--transition);
+  white-space: nowrap;
 }
 
-.btn-clear-all:hover {
-  color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.35);
+.btn-clear-all:hover:not(:disabled) {
+  color: #fafafa;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.btn-clear-all:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .btn-clear-all.confirming {
@@ -3693,6 +3987,12 @@ body.universe-view-active .message.system {
   background: rgba(220, 50, 50, 0.45);
   border-color: rgba(220, 50, 50, 0.9);
   animation: delete-pulse 1s ease-in-out infinite;
+}
+
+/* Hide legacy delete affordances (purge removed from UI) */
+.spell-item .delete-btn,
+.message.spell-card .delete-btn {
+  display: none !important;
 }
 
 .spells-hint {
@@ -4566,6 +4866,484 @@ body.universe-view-active .message.system {
 .brain-bus-summary {
   margin-top: 0.15rem;
   color: rgba(220, 220, 240, 0.9);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Fleet Command — black/white functional
+   "the scroll never forgets. the saint always remembers."
+   ═══════════════════════════════════════════════════════════════ */
+
+.breath-dot {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+  flex-shrink: 0;
+  background: #6b7280;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  vertical-align: middle;
+}
+.breath-dot[data-breath="Active"] {
+  background: #f5f5f5;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.55);
+}
+.breath-dot[data-breath="Idle"] {
+  background: #6b7280;
+}
+.breath-dot[data-breath="Dead"] {
+  background: #111;
+  box-shadow: 0 0 0 1px #ef4444;
+}
+.convo-item.breath-dead .convo-name {
+  opacity: 0.72;
+}
+.convo-item.has-session .breath-dot[data-breath="Active"] {
+  animation: breath-pulse 2.4s ease-in-out infinite;
+}
+@keyframes breath-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.fleet-brain-modal {
+  max-width: min(960px, 96vw);
+  width: 96vw;
+}
+.fleet-mission-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.35rem 1rem 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.fleet-mission-input {
+  flex: 1 1 14rem;
+  min-width: 12rem;
+  background: #0a0a0c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f5f5f5;
+  border-radius: 6px;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.8rem;
+}
+.fleet-mission-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.45);
+}
+.btn-fleet-mission {
+  white-space: nowrap;
+}
+.fleet-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: #d4d4d8;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.fleet-auto-toggle input {
+  accent-color: #f5f5f5;
+}
+.fleet-dashboard-section {
+  margin-bottom: 1rem;
+}
+.fleet-motto {
+  margin: 0 0 0.55rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: #a1a1aa;
+  font-style: italic;
+}
+.fleet-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.65rem;
+}
+.fleet-stat {
+  font-size: 0.68rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: #e4e4e7;
+  background: #0a0a0c;
+}
+.fleet-stat[data-breath="Active"] {
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #fafafa;
+}
+.fleet-stat[data-breath="Idle"] {
+  color: #a1a1aa;
+}
+.fleet-stat[data-breath="Dead"] {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+}
+.fleet-table-wrap {
+  overflow: auto;
+  max-height: 16rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+.fleet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  color: #e4e4e7;
+}
+.fleet-table th {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  background: #0a0a0c;
+  color: #a1a1aa;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.fleet-table td {
+  padding: 0.4rem 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  vertical-align: middle;
+}
+.fleet-table tr[data-breath="Dead"] {
+  background: rgba(239, 68, 68, 0.06);
+}
+.fleet-focus-name {
+  font-weight: 600;
+  color: #fafafa;
+}
+.fleet-session,
+.fleet-mission-cell,
+.fleet-last {
+  color: #a1a1aa;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-row-actions {
+  white-space: nowrap;
+}
+.fleet-row-actions .btn-sm {
+  margin-left: 0.2rem;
+  font-size: 0.62rem;
+  padding: 0.15rem 0.4rem;
+}
+.fleet-alert {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  color: #fca5a5;
+}
+
+.fleet-link-fieldset {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem 0.5rem;
+  margin: 0.5rem 0 0.75rem;
+}
+.fleet-link-fieldset legend {
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a1a1aa;
+}
+.fleet-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.45rem;
+}
+
+/* Linked-session send — one row, one status word */
+.hermes-send-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.45rem;
+}
+.hermes-send-input {
+  flex: 1 1 10rem;
+  min-width: 7rem;
+  background: #0a0a0c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f5f5f5;
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.8rem;
+}
+.hermes-send-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.hermes-delivery-status {
+  font-size: 0.65rem;
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+  color: #71717a;
+  min-width: 2.5rem;
+}
+.hermes-delivery-status[data-status="sent"] {
+  color: #a3e635;
+}
+.hermes-delivery-status[data-status="failed"] {
+  color: #fca5a5;
+}
+.hermes-delivery-status[data-status="idle"] {
+  color: #71717a;
+}
+.brain-session-send-list {
+  margin-top: 0.75rem;
+}
+.brain-session-send-row {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  margin-bottom: 0.4rem;
+  background: #0a0a0c;
+}
+.brain-session-send-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+  margin-bottom: 0.3rem;
+  font-size: 0.72rem;
+}
+.brain-session-send-meta strong {
+  color: #fafafa;
+}
+.brain-hermes-send {
+  margin-top: 0;
+}
+.fleet-breathing-badge {
+  font-size: 0.68rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e4e4e7;
+  margin-left: auto;
+}
+.fleet-breathing-badge[data-breath="Active"] {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fafafa;
+}
+.fleet-breathing-badge[data-breath="Dead"] {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+}
+.fleet-link-hint {
+  margin-top: 0.45rem;
+}
+
+.fleet-cast-section {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+}
+.fleet-cast-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.35rem 0;
+}
+.fleet-auto-cast-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: #f5f5f5;
+  cursor: pointer;
+}
+.fleet-cast-status {
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #d4d4d8;
+}
+.fleet-cast-status[data-cast="working"] {
+  color: #fafafa;
+  border-color: rgba(255, 255, 255, 0.45);
+}
+.fleet-cast-status[data-cast="cast"] {
+  color: #a3e635;
+  border-color: rgba(163, 230, 53, 0.4);
+}
+.fleet-cast-status[data-cast="failed"] {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.45);
+}
+.fleet-cast-status[data-cast="pending"] {
+  color: #a1a1aa;
+}
+
+/* ── Session0 · master orchestrator ── */
+.session0-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 250, 250, 0.28);
+  color: #e4e4e7;
+  background: #0a0a0c;
+  white-space: nowrap;
+}
+.session0-badge.is-master {
+  border-color: rgba(250, 250, 250, 0.65);
+  color: #fafafa;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.08);
+}
+.session0-badge.is-master::before {
+  content: "☉";
+  font-size: 0.7rem;
+  opacity: 0.9;
+}
+.fleet-role-badge {
+  display: inline-block;
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #a1a1aa;
+}
+.fleet-role-badge.is-fleet {
+  color: #d4d4d8;
+  border-color: rgba(161, 161, 170, 0.4);
+}
+.fleet-role-badge.is-master {
+  color: #fafafa;
+  border-color: rgba(250, 250, 250, 0.45);
+}
+.session0-orchestrator-banner {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  margin: 0 0 0.75rem;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.06), transparent 55%),
+    #0a0a0c;
+}
+.session0-orchestrator-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+.session0-orchestrator-head strong {
+  color: #fafafa;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+}
+.session0-orchestrator-role {
+  font-size: 0.65rem;
+  color: #a1a1aa;
+  letter-spacing: 0.04em;
+}
+.session0-orchestrator-copy {
+  margin: 0 0 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: #d4d4d8;
+}
+.session0-orchestrator-copy code {
+  font-size: 0.68rem;
+  color: #f5f5f5;
+}
+.session0-master-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.72rem;
+}
+.session0-link-hint {
+  margin: 0.25rem 0 0;
+}
+.session0-stat {
+  border-color: rgba(250, 250, 250, 0.45) !important;
+  color: #fafafa !important;
+}
+.fleet-nodes-title {
+  margin-top: 0.85rem;
+}
+.fleet-row-fleet td {
+  opacity: 0.95;
+}
+.brain-session-send-row.is-session0-master {
+  border-color: rgba(250, 250, 250, 0.28);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.05), #0a0a0c);
+}
+.btn-spell.session0-send,
+button.session0-send {
+  font-size: 0.65rem;
+  letter-spacing: 0.03em;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: #0a0a0c;
+  color: #f5f5f5;
+  border-radius: 6px;
+  padding: 0.22rem 0.5rem;
+  cursor: pointer;
+  /* Clipboard-first manual cast — visual cue that this is a copy handoff */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+.btn-spell.session0-send:hover,
+button.session0-send:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fafafa;
+}
+.btn-spell.session0-send.is-session0,
+button.session0-send.is-session0 {
+  border-color: rgba(250, 250, 250, 0.55);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03));
+  font-weight: 600;
+}
+.btn-spell.session0-send.is-fleet-node,
+button.session0-send.is-fleet-node {
+  border-color: rgba(161, 161, 170, 0.45);
+  color: #e4e4e7;
+}
+.spell-actions-compact.has-session0-send {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+  padding: 0 0.15rem 0.15rem;
+}
+.spell-face-target-tag.session0-linked {
+  border-color: rgba(250, 250, 250, 0.4);
+  color: #fafafa;
 }
 
 /* ── Spell detail modal ── */

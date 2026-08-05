@@ -65,6 +65,40 @@ import {
   classifyIntelCategory,
   normalizeCertainty,
   parseBusCommand,
+  parseMsgCommand,
+  parseMsgLoopCommand,
+  ensureSelfMessageLoop,
+  ensureCriticalPurgeProtection,
+  ensureGrimoireSelfFocus,
+  ensureActiveFocus,
+  mergeDuplicateSealedFocuses,
+  isPurgeProtected,
+  isJacobLinkedFocus,
+  shouldBePurgeProtected,
+  assertAiGovernance,
+  detectForbiddenAiAction,
+  AI_FORBIDDEN_ACTIONS,
+  ensureFleetCommandState,
+  ensureFleetFocusFields,
+  ensureFleetSpellFields,
+  refreshBreathingStatus,
+  deriveBreathingStatus,
+  parseFleetMission,
+  formatSpellForSessionDelivery,
+  formatSession0MessagePacket,
+  SESSION0_NAME,
+  isSession0,
+  normalizeLinkedSessionLabel,
+  resolveSpellLinkedSession,
+  spellSendTargetLabel,
+  isSession0BroadcastTarget,
+  listFleetSessions,
+  BREATHING_STATUSES,
+  CAST_STATUSES,
+  BREATHING_POLL_MS,
+  AUTO_CAST_TIMEOUT_MS,
+  BREATHING_ACTIVE_MS,
+  BREATHING_IDLE_MS,
   makeBusMessage,
   resolveBusChannel,
   BUS_CHANNEL_ROUTES,
@@ -95,13 +129,13 @@ import {
   buildGrimoireSovereignEvolutionRoadmap,
   SOVEREIGN_EVOLUTION_SLUG,
   ROADMAP_STATUSES,
-} from "./data.js?v=sovereign-evolution-1";
+} from "./data.js?v=session0-fleet-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=sovereign-evolution-1";
+} from "./stars.js?v=session0-fleet-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -109,7 +143,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=sovereign-evolution-1";
+} from "./universe.js?v=session0-fleet-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -164,17 +198,20 @@ import {
   resolveScrollNode,
   registerBusNode,
   densenBusMessage,
+  densenMsgDelivery,
+  consolidateSession0FleetResponse,
+  refuseAutoPurge,
   searchBusLocal,
   relayIntelBetweenFocuses,
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
-} from "./intelligence.js?v=sovereign-evolution-1";
+} from "./intelligence.js?v=session0-fleet-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=sovereign-evolution-1";
+} from "./health.js?v=session0-fleet-1";
 import {
   detectGap,
   logPulse,
@@ -216,13 +253,38 @@ function ensureMobileOverlay(side) {
   return el;
 }
 
-// ─── State ───
+// ─── State (hardened — never let boot crash leave emergency shell only) ───
 
-const state = loadState();
+let state;
+try {
+  state = loadState();
+} catch (err) {
+  console.error("[grimoire] loadState failed — recovering empty shell", err);
+  try {
+    window.__GrimoireErrors = window.__GrimoireErrors || [];
+    window.__GrimoireErrors.push({ from: "loadState", message: String(err?.message || err) });
+  } catch {
+    /* ignore */
+  }
+  state = {
+    conversations: [],
+    spells: [],
+    activeId: null,
+    spellsOpen: true,
+    spellView: "active",
+    spellListMode: "compact",
+    focusFolders: [],
+    roadmaps: [],
+  };
+}
 // Silent migration: strip archetype from existing conversations (legacy purge)
-for (const c of state.conversations || []) {
-  if ("archetype" in c) delete c.archetype;
-  ensureCertainty(c);
+try {
+  for (const c of state.conversations || []) {
+    if ("archetype" in c) delete c.archetype;
+    ensureCertainty(c);
+  }
+} catch (err) {
+  console.warn("[grimoire] certainty migrate", err);
 }
 // Per-focus vault: restore vaultLinked from per-focus LS handles
 try {
@@ -308,25 +370,79 @@ try {
 } catch {
   /* ignore */
 }
-// SCROLL eternal-intelligence Focus (idempotent seed after load)
-ensureScrollFocus(state);
-// Cell2 Core — app self-intelligence engine (idempotent system seed)
-ensureCell2CoreFocus(state);
-// Roadmap Engine — structured build plans (memory + vault)
-ensureRoadmapsState(state);
-// One canonical self-evolution plan (SCROLL plans · Grimoire verifies)
-ensureSovereignEvolutionRoadmap(state);
+// Core seeds + protection (each isolated so one failure cannot kill the app)
+try {
+  ensureScrollFocus(state);
+} catch (err) {
+  console.warn("[grimoire] ensureScrollFocus", err);
+}
+try {
+  ensureCell2CoreFocus(state);
+} catch (err) {
+  console.warn("[grimoire] ensureCell2CoreFocus", err);
+}
+try {
+  ensureGrimoireSelfFocus(state);
+} catch (err) {
+  console.warn("[grimoire] ensureGrimoireSelfFocus", err);
+}
+try {
+  ensureCriticalPurgeProtection(state);
+} catch (err) {
+  console.warn("[grimoire] ensureCriticalPurgeProtection", err);
+}
+// Operator-safe merge of dual Wizard King / sealed clones (preserves history)
+try {
+  const n = mergeDuplicateSealedFocuses(state);
+  if (n > 0) {
+    try {
+      saveState(state);
+    } catch {
+      /* ignore */
+    }
+  }
+} catch (err) {
+  console.warn("[grimoire] mergeDuplicateSealedFocuses", err);
+}
+try {
+  ensureActiveFocus(state);
+} catch (err) {
+  console.warn("[grimoire] ensureActiveFocus", err);
+}
+try {
+  ensureRoadmapsState(state);
+} catch (err) {
+  console.warn("[grimoire] ensureRoadmapsState", err);
+}
+try {
+  ensureSovereignEvolutionRoadmap(state);
+} catch (err) {
+  console.warn("[grimoire] ensureSovereignEvolutionRoadmap", err);
+}
+try {
+  ensureFleetCommandState(state);
+} catch (err) {
+  console.warn("[grimoire] ensureFleetCommandState", err);
+}
 // SCROLL List auto-curates whenever vault writes land
-setScrollListCurateProvider(() => ({
-  conversations: state.conversations,
-  spells: state.spells,
-}));
+try {
+  setScrollListCurateProvider(() => ({
+    conversations: state.conversations,
+    spells: state.spells,
+  }));
+} catch (err) {
+  console.warn("[grimoire] setScrollListCurateProvider", err);
+}
 // Focus org UI (search is ephemeral; folders + pin/tags persist via saveState)
 if (!Array.isArray(state.focusFolders) || !state.focusFolders.length) {
   state.focusFolders = structuredClone(DEFAULT_FOCUS_FOLDERS);
 }
-for (const c of state.conversations || []) {
-  ensureFocusOrgFields(c, { assignFolder: true });
+try {
+  for (const c of state.conversations || []) {
+    ensureFocusOrgFields(c, { assignFolder: true });
+  }
+} catch (err) {
+  console.warn("[grimoire] ensureFocusOrgFields loop", err);
 }
 /** Live search query for FOCUSES panel (not persisted). */
 state.focusSearchQuery = "";
@@ -340,10 +456,15 @@ state.universeView = (() => {
 })();
 
 // Runtime purge for stale removed focuses that may still exist in saved state.
+// Never auto-delete purgeProtected / operator-critical focuses.
 (function purgeRemovedFocuses() {
   const removedIds = new Set(["misty-discord"]);
   const before = state.conversations.length;
-  state.conversations = state.conversations.filter((c) => !removedIds.has(c.id));
+  state.conversations = state.conversations.filter((c) => {
+    if (!removedIds.has(c.id)) return true;
+    if (isPurgeProtected(c)) return true; // crown protection
+    return false;
+  });
   const removed = before - state.conversations.length;
   if (removed > 0) {
     state.spells = (state.spells || []).filter((s) => !removedIds.has(s.conversationId));
@@ -370,6 +491,10 @@ const els = {
   entityName: $("#entity-name"),
   entityType: $("#entity-type"),
   sealedChannelValue: $("#sealed-channel-value"),
+  chatRelayToggle: $("#chat-relay-toggle"),
+  chatRelayInput: $("#chat-relay-input"),
+  chatRelayLabel: $("#chat-relay-label"),
+  chatRelayHint: $("#chat-relay-hint"),
   chatForm: $("#chat-form"),
   chatInput: $("#chat-input"),
   btnSend: $("#btn-send"),
@@ -397,8 +522,9 @@ const els = {
   spellsList: $("#spells-list"),
   spellsHint: $("#spells-hint"),
   tabSpellsActive: $("#tab-spells-active"),
-  tabSpellsLibrary: $("#tab-spells-library"),
   tabSpellsHistory: $("#tab-spells-history"),
+  btnCopySpellbook: $("#btn-copy-spellbook"),
+  btnClearAll: $("#btn-clear-active"),
   spellDetailDialog: $("#spell-detail-dialog"),
   spellDetailTitle: $("#spell-detail-title"),
   spellDetailSub: $("#spell-detail-sub"),
@@ -416,6 +542,7 @@ const els = {
   btnSpellsTitle: $("#btn-spells-title"),
   spellsTitleMenu: $("#spells-title-menu"),
   btnCraftComplexSpell: $("#btn-craft-complex-spell"),
+  spellsPanel: $("#spells-panel"),
   constellationPing: $("#constellation-ping"),
   app: $(".app") || document.querySelector(".app"),
   stars: $("#stars"),
@@ -441,6 +568,8 @@ const els = {
   editDialog: $("#edit-convo-dialog"),
   editId: $("#edit-entity-id"),
   editName: $("#edit-entity-name"),
+  editType: $("#edit-entity-type"),
+  editModel: $("#edit-entity-model"),
   editTypeLabel: $("#edit-entity-type-label"),
   editModelLabel: $("#edit-model-label"),
   btnCancelEdit: $("#btn-cancel-edit"),
@@ -466,6 +595,14 @@ const els = {
   brainBody: $("#brain-body"),
   brainSub: $("#brain-sub"),
   btnBrainClose: $("#btn-brain-close"),
+  fleetMissionInput: $("#fleet-mission-input"),
+  btnFleetMission: $("#btn-fleet-mission"),
+  fleetAutonomousToggle: $("#fleet-autonomous-toggle"),
+  editLinkedSession: $("#edit-linked-session"),
+  editHermesSendRow: $("#edit-hermes-send-row"),
+  editSessionMessage: $("#edit-session-message"),
+  btnSendSession: $("#btn-send-session"),
+  editDeliveryStatus: $("#edit-delivery-status"),
   busStatus: $("#bus-status"),
   busStatusValue: $("#bus-status-value"),
   toast: $("#toast"),
@@ -790,26 +927,66 @@ function formatSpellTime(ts) {
 }
 
 function setSpellView(view) {
+  // Library deprecated — only ACTIVE and CAST HISTORY
   if (view === "history") state.spellView = "history";
-  else if (view === "library") state.spellView = "library";
   else state.spellView = "active";
   persist();
   renderSpells();
 }
 
 function ensureSpellView() {
-  if (state.spellView !== "history" && state.spellView !== "library") {
+  // Migrate legacy library view → active
+  if (state.spellView === "library") state.spellView = "active";
+  if (state.spellView !== "history") {
     state.spellView = "active";
   }
   return state.spellView;
 }
 
-/** All catalogued spells (library) — any focus, newest first */
-function librarySpells() {
-  return (state.spells || [])
-    .filter((s) => s && !isReceiptSpell(s))
-    .map((s) => normalizeSpell(s))
-    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+/** Compact cards (default) vs expanded full-text audit list. */
+function ensureSpellListMode() {
+  if (state.spellListMode !== "detail") state.spellListMode = "compact";
+  return state.spellListMode;
+}
+
+function isSpellDetailListMode() {
+  return ensureSpellListMode() === "detail";
+}
+
+/**
+ * Toggle Spells panel compact ↔ full detail.
+ * Persists for the session while a focus is selected (re-renders keep mode).
+ * Read-only layout switch — no spell mutations.
+ */
+function setSpellListMode(mode) {
+  state.spellListMode = mode === "detail" ? "detail" : "compact";
+  syncSpellListModeChrome();
+  try {
+    persist();
+  } catch {
+    /* ignore */
+  }
+  void renderSpells();
+}
+
+function toggleSpellListMode() {
+  setSpellListMode(isSpellDetailListMode() ? "compact" : "detail");
+  toast(
+    isSpellDetailListMode()
+      ? "Full detail view — scroll to audit all spell text"
+      : "Compact cards",
+    "success"
+  );
+}
+
+function syncSpellListModeChrome() {
+  const detail = isSpellDetailListMode();
+  const panel = els.spellsPanel || document.getElementById("spells-panel");
+  const list = els.spellsList || document.getElementById("spells-list");
+  panel?.classList.toggle("spell-list-detail", detail);
+  panel?.classList.toggle("spell-list-compact", !detail);
+  list?.classList.toggle("spells-list-detail", detail);
+  list?.classList.toggle("spells-list-compact", !detail);
 }
 
 // ── Node contribution metrics (vault-derived, cached per focus) ──
@@ -916,6 +1093,18 @@ function clearSpellAwaitReply(spellId, { silent = false, reason = "" } = {}) {
   if (!spell.awaitingReply && !spell.awaitingReplyAt) return;
   spell.awaitingReply = false;
   spell.awaitingReplyAt = null;
+  // Fleet: timeout/cancel of working auto-cast → failed
+  if (
+    (spell.autoCast || spell.castStatus === "working") &&
+    spell.castStatus === "working" &&
+    (reason === "timeout" || reason === "cancel")
+  ) {
+    try {
+      failAutoCastSpell(spell, reason === "timeout" ? "timeout — no reply densened" : "cancelled");
+    } catch {
+      /* ignore */
+    }
+  }
   persist();
   if (!silent) {
     if (reason === "timeout") {
@@ -1203,6 +1392,39 @@ async function handleAwaitPasteReply(convo, pastedText) {
   spell.castTimestamp = spell.castTimestamp || now;
   spell.awaitingReply = false;
 
+  // Fleet Auto-Cast pipeline → cast
+  try {
+    if (spell.autoCast || spell.castStatus === "working") {
+      completeAutoCastSpell(spell, { replyExcerpt: text });
+    }
+  } catch (err) {
+    console.warn("[fleet] complete auto-cast", err);
+  }
+
+  // Session0 consolidated fleet response → focus intelligence (auto-write-back)
+  try {
+    const linked = resolveSpellLinkedSession(spell, convo);
+    const looksFleet =
+      isSession0(linked) ||
+      isSession0BroadcastTarget(spell, convo) ||
+      /session0|response from|consolidated/i.test(text);
+    if (looksFleet || spell.fleetDeployed || spell.castStatus === "cast") {
+      void consolidateSession0FleetResponse(convo, text, {
+        spell,
+        conversations: state.conversations,
+        source: "Session0",
+      }).catch((err) => console.warn("[session0] consolidate", err));
+    }
+  } catch (err) {
+    console.warn("[session0] consolidate path", err);
+  }
+
+  try {
+    touchFleetActivity(convo);
+  } catch {
+    /* ignore */
+  }
+
   toast("Reply received and sealed", "success");
   activityPing(`✦ Reply sealed · ${spellFaceTitle(spell)}`);
   persist();
@@ -1291,13 +1513,145 @@ function touchFocus(convo) {
   convo.updatedAt = Date.now();
 }
 
-function toast(msg, kind = "") {
-  els.toast.textContent = msg;
-  els.toast.className = "toast show" + (kind ? ` ${kind}` : "");
+function toast(msg, kind = "", durationMs) {
+  const el = els.toast || document.getElementById("toast");
+  if (!el) {
+    console.log("[toast]", msg);
+    return;
+  }
+  el.textContent = msg;
+  el.className = "toast show" + (kind ? ` ${kind}` : "");
   clearTimeout(toast._t);
+  const ms =
+    Number(durationMs) > 0
+      ? Number(durationMs)
+      : kind === "success"
+        ? 3600
+        : 2400;
   toast._t = setTimeout(() => {
-    els.toast.className = "toast";
-  }, 2200);
+    el.className = "toast";
+  }, ms);
+}
+
+/**
+ * Synchronous clipboard write (keeps user-gesture). Manual paste only.
+ * Returns true on success, false on failure — never throws for exec path.
+ */
+function copyTextToClipboardSync(text) {
+  const body = String(text ?? "");
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = body;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText =
+      "position:fixed;left:-9999px;top:0;opacity:0;width:1px;height:1px;";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, body.length);
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return Boolean(ok);
+  } catch (err) {
+    console.warn("[clipboard-sync]", err);
+    return false;
+  }
+}
+
+/** Clipboard write with sync-first + async Clipboard API fallback. */
+async function copyTextToClipboard(text) {
+  if (copyTextToClipboardSync(text)) return true;
+  const body = String(text ?? "");
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(body);
+    return true;
+  }
+  throw new Error("clipboard copy failed");
+}
+
+/**
+ * Chat header "Relay to [session]" toggle.
+ * Visible only when Focus has linkedSession set.
+ * OFF = local GRIMOIRE only · ON = also copy outbound chat to clipboard for Hermes paste.
+ * Persists per Focus (convo.chatRelay).
+ */
+function syncChatRelayUi(convo) {
+  const wrap = els.chatRelayToggle || document.getElementById("chat-relay-toggle");
+  const input = els.chatRelayInput || document.getElementById("chat-relay-input");
+  const label = els.chatRelayLabel || document.getElementById("chat-relay-label");
+  const hint = els.chatRelayHint || document.getElementById("chat-relay-hint");
+  if (!wrap) return;
+
+  if (!convo) {
+    wrap.setAttribute("hidden", "");
+    wrap.classList.remove("is-active");
+    if (input) input.checked = false;
+    return;
+  }
+
+  ensureFleetFocusFields(convo);
+  const session = normalizeLinkedSessionLabel(convo.linkedSession || "");
+  if (!session) {
+    wrap.setAttribute("hidden", "");
+    wrap.classList.remove("is-active");
+    if (input) input.checked = false;
+    return;
+  }
+
+  wrap.removeAttribute("hidden");
+  const on = Boolean(convo.chatRelay);
+  if (input) input.checked = on;
+  wrap.classList.toggle("is-active", on);
+  wrap.dataset.session = session;
+  if (label) label.textContent = `Relay to ${session}`;
+  if (hint) hint.textContent = on ? "clipboard · active" : "clipboard only";
+  wrap.title = on
+    ? `Relay ON — chat messages also copy for pasting into Hermes ${session}. Manual paste only.`
+    : `Relay OFF — chat stays local to GRIMOIRE. Turn on to copy messages for Hermes ${session}.`;
+}
+
+function setChatRelayForActiveFocus(on) {
+  const convo = activeConvo();
+  if (!convo) return;
+  ensureFleetFocusFields(convo);
+  const session = normalizeLinkedSessionLabel(convo.linkedSession || "");
+  if (!session) {
+    toast("Link a session on this Focus first", "");
+    syncChatRelayUi(convo);
+    return;
+  }
+  convo.chatRelay = Boolean(on);
+  persist();
+  syncChatRelayUi(convo);
+  toast(
+    convo.chatRelay
+      ? `Relay ON · messages copy for Hermes ${session}`
+      : "Relay OFF · chat stays local to GRIMOIRE",
+    "success"
+  );
+}
+
+/**
+ * When chatRelay is ON for this Focus, copy outbound user text to clipboard.
+ * No HTTP. No auto-delivery. Operator pastes into Hermes.
+ */
+async function maybeRelayChatToClipboard(convo, text) {
+  if (!convo) return { ok: false, reason: "no_focus" };
+  ensureFleetFocusFields(convo);
+  if (!convo.chatRelay) return { ok: false, reason: "relay_off" };
+  const session = normalizeLinkedSessionLabel(convo.linkedSession || "");
+  if (!session) return { ok: false, reason: "unlinked" };
+  const body = String(text || "").trim();
+  if (!body) return { ok: false, reason: "empty" };
+  try {
+    await copyTextToClipboard(body);
+    activityPing(`⎘ Relayed · Hermes ${session}`);
+    return { ok: true, session };
+  } catch (err) {
+    console.warn("[chat-relay] clipboard failed", err);
+    toast("Relay copy failed — clipboard unavailable", "");
+    return { ok: false, reason: "clipboard", error: err };
+  }
 }
 
 function uid(prefix = "id") {
@@ -1853,12 +2207,25 @@ function buildFocusRow(c) {
     );
   }
 
+  ensureFleetFocusFields(c);
+  const breath = c.breathingStatus || deriveBreathingStatus(c);
+  const breathTitle = c.linkedSession
+    ? `${breath} · ${c.linkedSession}${c.currentMission ? ` · ${c.currentMission}` : ""}`
+    : `${breath} · no session linked`;
+  row.dataset.breathing = breath;
+  if (c.linkedSession) row.classList.add("has-session");
+  if (breath === "Dead") row.classList.add("breath-dead");
+
+  const channel = getSealedChannel(c);
+  const channelLabel = sealedChannelLabel(c);
   btn.innerHTML = `
     <span class="convo-text">
       <span class="convo-name-row">
+        <span class="breath-dot" data-breath="${escapeHtml(breath)}" title="${escapeHtml(breathTitle)}" aria-label="Breathing ${escapeHtml(breath)}"></span>
         ${c.pinned ? `<span class="convo-pin-mark" title="Pinned" aria-hidden="true">★</span>` : ""}
         <span class="convo-name">${escapeHtml(c.name)}</span>
       </span>
+      <span class="convo-channel" title="${escapeHtml(channelLabel)}">${escapeHtml(channel || "—")}</span>
     </span>
     ${badgeParts.join("")}
   `;
@@ -1906,7 +2273,7 @@ function buildFocusRow(c) {
   const del = document.createElement("button");
   del.type = "button";
   del.className = "focus-delete-btn";
-  del.title = `Delete focus ${c.name}`;
+  del.title = `Delete focus ${c.name} · ${channel}`;
   del.setAttribute("aria-label", `Delete focus ${c.name}`);
   del.textContent = "✕";
   del.addEventListener("click", (e) => {
@@ -1922,6 +2289,14 @@ function buildFocusRow(c) {
 
   row.appendChild(btn);
   row.appendChild(actions);
+
+  // Right-click: Delete focus (discoverable without hunting tiny ✕)
+  row.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    requestDeleteFocus(c.id);
+  });
+
   wireFocusDrag(row, c);
   return row;
 }
@@ -2141,19 +2516,72 @@ async function requestDeleteFocus(focusId) {
 
   const channel = getSealedChannel(focus);
   const label = `${focus.name} · ${channel}`;
+  const protectedNote = isPurgeProtected(focus)
+    ? `\n\n⚠ OPERATOR-CRITICAL (purgeProtected). AI cannot auto-delete this focus. Jacob is the crown.`
+    : "";
   const ok = window.confirm(
-    `Delete ${label}?\n\nThis removes all spells and intelligence data for this sealed channel.\n\nNo undo. Permanent.`
+    `Delete ${label}?\n\nThis removes all spells and intelligence data for this sealed channel.\n\nNo undo. Permanent.${protectedNote}`
   );
   if (!ok) return;
 
-  await deleteFocus(focusId);
+  // Operator crown — force after explicit confirm
+  await deleteFocus(focusId, { source: "operator", force: true });
 }
 
-async function deleteFocus(focusId) {
+/**
+ * Delete a focus. Operator-critical focuses (purgeProtected) cannot be
+ * auto-deleted by AI — Jacob is the crown. Operator UI may force after confirm.
+ *
+ * @param {string} focusId
+ * @param {{ source?: string, force?: boolean }} [opts]
+ */
+async function deleteFocus(focusId, opts = {}) {
   const focus = state.conversations.find((c) => c.id === focusId);
-  if (!focus) return;
+  if (!focus) return { ok: false, reason: "missing" };
 
+  const source = String(opts.source || "operator").toLowerCase();
+  const force = opts.force === true;
   const label = `${focus.name} · ${getSealedChannel(focus)}`;
+
+  // Governance: purgeProtected focuses block all non-operator deletes
+  const refuse = refuseAutoPurge(focus, { source });
+  if (refuse.refused) {
+    console.error(
+      "[governance] PURGE BLOCKED — purgeProtected focus cannot be auto-deleted:",
+      focus.name,
+      focus.id,
+      "source=",
+      source
+    );
+    toast("Protected focus — AI cannot auto-delete. Jacob is the crown.", "");
+    activityPing(`✦ Purge blocked · ${focus.name} · purgeProtected`);
+    pushBusActivity({
+      kind: "governance",
+      summary: `Purge blocked · ${focus.name}`,
+      nodeName: focus.name,
+      localOnly: true,
+      detail: refuse.reason,
+    });
+    return { ok: false, reason: "purge_protected", protected: true };
+  }
+  if (isPurgeProtected(focus) && source !== "operator" && source !== "jacob" && source !== "user") {
+    console.error(
+      "[governance] PURGE BLOCKED — non-operator delete of purgeProtected:",
+      focus.name,
+      focus.id
+    );
+    toast("Protected focus — cannot auto-delete", "");
+    return { ok: false, reason: "purge_protected", protected: true };
+  }
+  if (isPurgeProtected(focus) && !force && source === "operator") {
+    // Extra safety: operator path must pass force:true after confirm
+    console.error(
+      "[governance] PURGE BLOCKED — operator must force:true after confirm:",
+      focus.name
+    );
+    toast("Protected focus — confirm Healer purge with force", "");
+    return { ok: false, reason: "needs_force", protected: true };
+  }
 
   // Remove spells for this focus
   state.spells = state.spells.filter((s) => s.conversationId !== focusId);
@@ -2180,35 +2608,31 @@ async function deleteFocus(focusId) {
   persist();
   renderAll();
   toast(`Focus purged: ${label}`, "success");
+  return { ok: true };
 }
 
-// One-time: dedupe duplicate Wizard King focuses from legacy state
+// Heal dual Wizard King / sealed-channel clones every boot (merge, never silent wipe).
+// purgeProtected blocks AI auto-DELETE; merge preserves all messages into the keeper.
 try {
-  const dedupeKey = "grimoire-wizard-king-deduped-v1";
-  if (!localStorage.getItem(dedupeKey)) {
-    const wkConvos = (state.conversations || []).filter(
-      (c) => String(c?.name || "").trim().toLowerCase() === "wizard king"
-    );
-    if (wkConvos.length > 1) {
-      wkConvos.sort((a, b) => {
-        const aScore = (a?.messages?.length || 0) + (a?.pulseCount || 0) * 10;
-        const bScore = (b?.messages?.length || 0) + (b?.pulseCount || 0) * 10;
-        return bScore - aScore;
-      });
-      const keeper = wkConvos[0];
-      const removals = new Set(wkConvos.slice(1).map((c) => c.id));
-      state.conversations = state.conversations.filter(
-        (c) => !removals.has(c.id)
-      );
-      state.spells = (state.spells || []).filter(
-        (s) => !removals.has(s.conversationId)
-      );
-      if (removals.has(state.activeId)) {
-        state.activeId = keeper.id;
-      }
+  const n = mergeDuplicateSealedFocuses(state);
+  ensureActiveFocus(state);
+  if (n > 0) {
+    try {
       persist();
+    } catch {
+      try {
+        saveState(state);
+      } catch {
+        /* ignore */
+      }
     }
-    localStorage.setItem(dedupeKey, "1");
+  }
+  // Clear legacy one-shot keys that previously deleted without merge
+  try {
+    localStorage.removeItem("grimoire-wizard-king-deduped-v1");
+    localStorage.removeItem("grimoire-wizard-king-deduped-v2");
+  } catch {
+    /* ignore */
   }
 } catch {
   /* ignore */
@@ -2281,6 +2705,7 @@ function renderChat() {
     if (els.spellCount) els.spellCount.dataset.count = "0";
     setChatControlsEnabled(false);
     updatePathGateUi(null);
+    syncChatRelayUi(null);
     if (els.chatInput) els.chatInput.placeholder = "Select a focus to begin casting spells.";
     if (els.constellationPing) els.constellationPing.textContent = "Select a focus";
     if (els.universeHudStage) els.universeHudStage.textContent = "VOID · 0% · —";
@@ -2309,6 +2734,7 @@ function renderChat() {
   if (els.sealedChannelValue) {
     els.sealedChannelValue.textContent = getSealedChannel(convo);
   }
+  syncChatRelayUi(convo);
   if (els.universeStage) {
     const snap = deriveFocusSnapshot(convo, state.spells);
     els.universeStage.textContent = `${getSealedChannel(convo)} · ${snap?.stageName || "VOID"}`;
@@ -2333,15 +2759,17 @@ function renderChat() {
     els.chatMessages.appendChild(note);
     els.chatMessages.scrollTop = 0;
     updateUniverseSystemLabels(convo);
+    // Relay chrome still reflects linked session even while vault-locked
+    syncChatRelayUi(convo);
     return;
   }
 
   if (isAiNode(convo) && !convoAlignmentUnlocked(convo)) {
-    els.chatInput.placeholder = `Speak about ${convo.name} — /bus list · Cast Spell for Alignment Reveal…`;
+    els.chatInput.placeholder = `Speak about ${convo.name} — /msg · /bus list · Cast Spell…`;
   } else if (isAiNode(convo)) {
-    els.chatInput.placeholder = `Speak about ${convo.name} — /bus <node> <msg> · Cast Spell…`;
+    els.chatInput.placeholder = `Speak about ${convo.name} — /msg <node> <msg> · /bus · Cast Spell…`;
   } else {
-    els.chatInput.placeholder = `Speak about ${convo.name}… · /bus list · talk to <node>`;
+    els.chatInput.placeholder = `Speak about ${convo.name}… · /msg · /bus list · talk to <node>`;
   }
 
   if (!convo.messages.length) {
@@ -2638,9 +3066,7 @@ async function renderSpells() {
     const view = ensureSpellView();
     const readyList = convo ? activeSpellsFor(convo.id) : [];
     const histList = convo ? historySpellsFor(convo.id) : [];
-    const libList = librarySpells();
-    const list =
-      view === "history" ? histList : view === "library" ? libList : readyList;
+    const list = view === "history" ? histList : readyList;
 
     // Vault-derived contribution metrics for this focus (cached)
     let focusContrib = null;
@@ -2658,35 +3084,40 @@ async function renderSpells() {
     // Badge = Active queue length only
     syncSpellCountBadges(convo?.id || null, readyList.length);
 
-    // Tabs
+    // Tabs: ACTIVE (n) · CAST HISTORY — Library removed
     els.tabSpellsActive?.classList.toggle("active", view === "active");
-    els.tabSpellsLibrary?.classList.toggle("active", view === "library");
     els.tabSpellsHistory?.classList.toggle("active", view === "history");
     if (els.tabSpellsActive) {
-      els.tabSpellsActive.setAttribute("aria-selected", view === "active" ? "true" : "false");
-    }
-    if (els.tabSpellsLibrary) {
-      els.tabSpellsLibrary.setAttribute("aria-selected", view === "library" ? "true" : "false");
-      els.tabSpellsLibrary.textContent = libList.length
-        ? `Library (${libList.length})`
-        : "Library";
+      els.tabSpellsActive.setAttribute(
+        "aria-selected",
+        view === "active" ? "true" : "false"
+      );
+      els.tabSpellsActive.textContent =
+        readyList.length > 0 ? `Active (${readyList.length})` : "Active";
     }
     if (els.tabSpellsHistory) {
-      els.tabSpellsHistory.setAttribute("aria-selected", view === "history" ? "true" : "false");
-      els.tabSpellsHistory.textContent = histList.length
-        ? `Cast History (${histList.length})`
-        : "Cast History";
+      els.tabSpellsHistory.setAttribute(
+        "aria-selected",
+        view === "history" ? "true" : "false"
+      );
+      // No count badge on Cast History
+      els.tabSpellsHistory.textContent = "Cast History";
     }
+    // Clear Active only meaningful on ACTIVE tab with uncast spells
+    if (els.btnClearAll) {
+      els.btnClearAll.hidden = view !== "active";
+      els.btnClearAll.disabled = !convo || readyList.length === 0;
+    }
+    const detailMode = isSpellDetailListMode();
+    syncSpellListModeChrome();
     if (els.spellsHint) {
       els.spellsHint.textContent =
         view === "history"
           ? "Past casts. Click a card for full detail · Cast again from the modal."
-          : view === "library"
-            ? "All spells. Click a card for full detail · promote from the modal."
-            : "Compact spell face · click a card for full detail.";
+          : "Compact spell face · click a card for full detail. Tap Spells for craft / copy spellbook.";
     }
 
-    if (!convo && view !== "library") {
+    if (!convo) {
       els.spellsList.innerHTML = `<div class="spells-empty">Select a focus to see its spells.</div>`;
       syncSpellCountBadges(null, 0);
       return;
@@ -2696,19 +3127,54 @@ async function renderSpells() {
       els.spellsList.innerHTML = `<div class="spells-empty">${
         view === "history"
           ? "No cast history yet.<br/>Copy an Active spell to seal it here with a version stamp."
-          : view === "library"
-            ? "Library empty — forge spells via chat or Cast Spell."
-            : isAiNode(convo) && !convoAlignmentUnlocked(convo)
-              ? "Cast Spell for <strong>Alignment Reveal</strong>, or state intent in chat."
-              : isAiNode(convo)
-                ? "State intent in chat or hit <strong>Cast Spell</strong> to forge a directive."
-                : "Talk to Grimoire — clear intent forges a spell."
+          : isAiNode(convo) && !convoAlignmentUnlocked(convo)
+            ? "Cast Spell for <strong>Alignment Reveal</strong>, or state intent in chat."
+            : isAiNode(convo)
+              ? "State intent in chat or hit <strong>Cast Spell</strong> to forge a directive."
+              : "Talk to Grimoire — clear intent forges a spell."
       }</div>`;
       if (view === "active" && convo) syncSpellCountBadges(convo.id, 0);
       return;
     }
 
     els.spellsList.innerHTML = "";
+
+    /** Expanded audit block — title, target, status, version, full text. Read-only. */
+    function appendSpellDetailBlock(spell, index, total) {
+      normalizeSpell(spell);
+      const item = document.createElement("article");
+      item.className = "spell-detail-block";
+      item.dataset.spellId = spell.id || "";
+      const title = escapeHtml(spellFaceTitle(spell) || "Untitled spell");
+      const target = escapeHtml(
+        String(spell.target || convo?.name || "—").trim() || "—"
+      );
+      const status = escapeHtml(
+        (typeof spellStatusLabel === "function" && spellStatusLabel(spell)) ||
+          String(spell.status || "active")
+      );
+      const version = spell.iteration
+        ? `v${escapeHtml(String(spell.iteration))}`
+        : "—";
+      const full = escapeHtml(
+        formatSpellMarkdown(spell) ||
+          String(spell.content || spell.message || "").trim() ||
+          "(empty spell content)"
+      );
+      item.innerHTML = `
+        <header class="spell-detail-block-head">
+          <div class="spell-detail-block-index">${index + 1}/${total}</div>
+          <h4 class="spell-detail-block-title">${title}</h4>
+          <div class="spell-detail-block-meta">
+            <span class="spell-detail-meta-chip"><span class="k">Target</span> ${target}</span>
+            <span class="spell-detail-meta-chip"><span class="k">Status</span> ${status}</span>
+            <span class="spell-detail-meta-chip"><span class="k">Version</span> ${version}</span>
+          </div>
+        </header>
+        <pre class="spell-detail-block-body">${full}</pre>
+      `;
+      els.spellsList.appendChild(item);
+    }
 
     function appendSpellCard(spell, mode) {
       normalizeSpell(spell);
@@ -2734,7 +3200,7 @@ async function renderSpells() {
         "spell-item spell-face-card spell-tap-copy spell-card-compact" +
         ` spell-cat-${category}` +
         (isHist ? " spell-history" : "") +
-        (mode === "primary" ? " spell-primary" : mode === "library" ? " spell-library" : " spell-hold") +
+        (mode === "primary" ? " spell-primary" : " spell-hold") +
         (showSelf ? " spell-self-castable" : "") +
         (isAwaiting ? " spell-awaiting-reply" : "");
       item.dataset.spellId = spell.id;
@@ -2749,8 +3215,8 @@ async function renderSpells() {
 
       const owner = convo || resolveSpellFocus(spell);
 
+      // No delete/purge button on spell cards — Jacob cleans Active via Clear Active
       item.innerHTML = `
-        <button type="button" class="delete-btn" data-action="delete" title="${isHist ? "Prune from history" : "Delete spell"}">✕</button>
         ${
           isAwaiting
             ? `<button type="button" class="spell-await-cancel" data-action="cancel-await" title="Cancel await reply">×</button>
@@ -2761,13 +3227,7 @@ async function renderSpells() {
             : ""
         }
         ${spellCardFaceHtml(spell, owner)}
-        ${
-          shouldShowSelfCastButton(spell, owner)
-            ? `<div class="spell-actions spell-actions-compact">
-                <button type="button" class="btn-spell self-cast" data-action="self-cast" title="SELF-CAST into Focus chat">SELF-CAST</button>
-              </div>`
-            : ""
-        }
+        ${spellCardSendActionsHtml(spell, owner)}
       `;
       wireSpellCardActions(item, spell, {
         sealOnCopy: false,
@@ -2776,7 +3236,15 @@ async function renderSpells() {
       els.spellsList.appendChild(item);
     }
 
-    if (view === "active") {
+    if (detailMode) {
+      list.forEach((spell, i) => {
+        try {
+          appendSpellDetailBlock(spell, i, list.length);
+        } catch (err) {
+          console.warn("spell detail block render failed", spell?.id, err);
+        }
+      });
+    } else if (view === "active") {
       const primary = readyList[0];
       const rest = readyList.slice(1);
       if (primary) {
@@ -2796,7 +3264,7 @@ async function renderSpells() {
     } else {
       list.forEach((spell) => {
         try {
-          appendSpellCard(spell, view === "library" ? "library" : "history");
+          appendSpellCard(spell, "history");
         } catch (err) {
           console.warn("spell card render failed", spell?.id, err);
         }
@@ -2939,6 +3407,121 @@ function spellActionsHtml(spell, convo, { isSent }) {
   return `<div class="spell-actions${self ? " has-self-cast" : ""}">${selfBtn}<button type="button" class="btn-spell expand" data-action="expand">Content</button><span class="spell-tap-hint" aria-hidden="true">tap to expand</span></div>`;
 }
 
+/**
+ * Compact spell-card actions: Send to Session0 | Send to [session] (+ SELF-CAST).
+ * Clipboard-first manual cast — copies full spell text. No HTTP. No auto-delivery.
+ * "Send to Session0" shows when linkedSession resolves to Session0 (or default master).
+ */
+function spellCardSendActionsHtml(spell, convo) {
+  if (!spell) return "";
+  const isHist =
+    spellIsSealed(spell) ||
+    spell.status === "history" ||
+    spell.status === "sent" ||
+    spell.status === "archived";
+  const self = shouldShowSelfCastButton(spell, convo);
+  const sendLabel = spellSendTargetLabel(spell, convo);
+  const linked = resolveSpellLinkedSession(spell, convo);
+  const isMaster = !linked || isSession0(linked);
+  // Session0 master path: always show. Fleet-node path: show when a linked session exists.
+  const showSend = !isHist && (isMaster || Boolean(linked));
+  const sendBtn = showSend
+    ? `<button type="button" class="btn-spell session0-send${isMaster ? " is-session0" : " is-fleet-node"}" data-action="send-session0" title="${escapeHtml(
+        isMaster
+          ? "Copy full spell text — paste into Hermes Session0 (manual cast)"
+          : `Copy full spell text — paste into Hermes ${linked} (manual cast)`
+      )}">${escapeHtml(sendLabel)}</button>`
+    : "";
+  const selfBtn = self
+    ? `<button type="button" class="btn-spell self-cast" data-action="self-cast" title="SELF-CAST into Focus chat">SELF-CAST</button>`
+    : "";
+  if (!sendBtn && !selfBtn) return "";
+  return `<div class="spell-actions spell-actions-compact has-session0-send">${selfBtn}${sendBtn}</div>`;
+}
+
+/**
+ * Manual cast: copy full spell text to clipboard for paste into Hermes.
+ * DOES NOT POST, inject, watch, or bridge. Jacob pastes — Jacob is the crown.
+ */
+async function manualSendSpellToSession(spell, { source = "operator" } = {}) {
+  if (!spell) return { ok: false, reason: "no_spell" };
+  normalizeSpell(spell);
+  ensureFleetSpellFields(spell);
+  const focus =
+    resolveSpellFocus(spell, activeConvo()) ||
+    state.conversations.find(
+      (c) =>
+        isVisibleFocus(c) &&
+        String(c.name || "").toLowerCase() ===
+          String(spell.target || "").toLowerCase()
+    ) ||
+    null;
+  if (focus) ensureFleetFocusFields(focus);
+
+  let session = resolveSpellLinkedSession(spell, focus);
+  if (!session) {
+    session = SESSION0_NAME;
+    spell.linkedSession = SESSION0_NAME;
+  } else {
+    spell.linkedSession = session;
+  }
+
+  const fleetSessions = listFleetSessions(state.conversations || []);
+  const broadcast = isSession0BroadcastTarget(spell, focus);
+  const delivery =
+    formatSpellForSessionDelivery(spell, focus, {
+      fleetSessions,
+      mode: broadcast ? "broadcast" : "unicast",
+    }) ||
+    formatSpellMarkdown(spell) ||
+    String(spell.content || spell.message || "").trim();
+
+  if (!String(delivery || "").trim()) {
+    toast("Spell has no body to send", "");
+    return { ok: false, reason: "empty" };
+  }
+
+  try {
+    await copyTextToClipboard(delivery);
+  } catch (err) {
+    console.error("[manual-cast] clipboard failed", err);
+    toast("Copy failed — clipboard unavailable", "");
+    return { ok: false, reason: "clipboard", error: err };
+  }
+
+  spell.copiedAt = Date.now();
+  spell.updatedAt = Date.now();
+  // Manual cast loop: operator pastes into Hermes, then pastes reply back here
+  try {
+    beginSpellAwaitReply(spell.id);
+  } catch {
+    /* await is optional if timer wiring fails */
+  }
+
+  if (focus) {
+    focus.lastActivity = Date.now();
+    focus.breathingStatus = "Active";
+    // Clipboard handoff only — not HTTP "sent". Operator still pastes into Hermes.
+    focus.lastDelivery = { status: "idle", at: Date.now() };
+  }
+
+  persist();
+  void renderSpells();
+  renderConvoList();
+
+  const sessionLabel = isSession0(session) ? SESSION0_NAME : session;
+  toast(`Copied — paste into Hermes ${sessionLabel}`, "success");
+  activityPing(`✦ Copied · ${spellFaceTitle(spell)} → Hermes ${sessionLabel}`);
+  pushBusActivity({
+    kind: "manual-cast-copy",
+    summary: `Clipboard cast · **${spellFaceTitle(spell)}** → Hermes ${sessionLabel}`,
+    nodeName: focus?.name || spell.target,
+    localOnly: true,
+    detail: String(delivery).slice(0, 400),
+  });
+  return { ok: true, method: "clipboard", session: sessionLabel, source };
+}
+
 /** Edit spell face + content (title, subtitle, target, body). */
 function openEditSpellDialog(_item, spell) {
   if (!spell) return;
@@ -2991,13 +3574,7 @@ function openEditSpellDialog(_item, spell) {
 }
 
 function wireSpellCardActions(item, spell, { sealOnCopy, convo }) {
-  const deleteBtns = item.querySelectorAll('[data-action="delete"]');
-  deleteBtns.forEach((deleteBtn) => {
-    deleteBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      requestDeleteSpell(spell.id, e.currentTarget);
-    });
-  });
+  // Delete/purge buttons removed from spell cards — use Clear Active for uncast queue
   item.querySelector('[data-action="cancel-await"]')?.addEventListener("click", (e) => {
     e.stopPropagation();
     clearSpellAwaitReply(spell.id, { reason: "cancel" });
@@ -3006,6 +3583,13 @@ function wireSpellCardActions(item, spell, { sealOnCopy, convo }) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       selfCastSpell(spell.id);
+    });
+  });
+  item.querySelectorAll('[data-action="send-session0"]').forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Clipboard-first manual cast — never HTTP inject
+      void manualSendSpellToSession(spell, { source: "operator" });
     });
   });
 
@@ -3235,6 +3819,36 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
         <h3>Spell content</h3>
         <pre class="spell-detail-prompt" id="spell-detail-prompt-text">${escapeHtml(md)}</pre>
       </div>
+      <div class="spell-detail-section fleet-cast-section">
+        <h3>Fleet · Session0 Orchestrator</h3>
+        <p class="spell-detail-directions">
+          Clipboard-first manual cast: copy full spell text, paste into
+          <strong>Hermes Session0</strong>. No HTTP inject. No bridge. No watcher.
+          Session0 may use native Hermes <code>/msg</code> for fleet broadcast.
+          Paste replies back into this Focus to densen. Jacob is the crown.
+        </p>
+        <div class="fleet-cast-controls">
+          <label class="fleet-auto-cast-label">
+            <input type="checkbox" id="spell-auto-cast-toggle" ${spell.autoCast ? "checked" : ""} />
+            <span>Auto-Cast</span>
+          </label>
+          <span class="fleet-cast-status" data-cast="${escapeHtml(spell.castStatus || "pending")}">${escapeHtml(
+            String(spell.castStatus || "pending").toUpperCase()
+          )}</span>
+          <button type="button" class="btn-secondary btn-sm session0-send${isSession0BroadcastTarget(spell, focus) ? " is-session0" : " is-fleet-node"}" data-action="fleet-deploy-now" title="Route through Session0">
+            ${escapeHtml(spellSendTargetLabel(spell, focus))}
+          </button>
+        </div>
+        <p class="contrib-empty">
+          <span class="session0-badge${isSession0BroadcastTarget(spell, focus) ? " is-master" : ""}">${escapeHtml(
+            isSession0BroadcastTarget(spell, focus)
+              ? "Session0 · master"
+              : `via Session0 → ${resolveSpellLinkedSession(spell, focus) || "—"}`
+          )}</span>
+          · linked: ${escapeHtml(resolveSpellLinkedSession(spell, focus) || "Session0 (default)")}
+          ${spell.autoCastError ? ` · ${escapeHtml(spell.autoCastError)}` : ""}
+        </p>
+      </div>
       <div class="spell-detail-section">
         <h3>Actions</h3>
         <div class="spell-lifecycle-actions">${actionsHtml}</div>
@@ -3255,6 +3869,30 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
 
     const teachBox = els.spellDetailMain.querySelector("#spell-glyph-teach");
     const glyphInput = els.spellDetailMain.querySelector("#spell-glyph-input");
+    const autoToggle = els.spellDetailMain.querySelector("#spell-auto-cast-toggle");
+    autoToggle?.addEventListener("change", () => {
+      spell.autoCast = Boolean(autoToggle.checked);
+      ensureFleetSpellFields(spell);
+      if (spell.autoCast && spell.castStatus === "pending") {
+        // Queue for fleet engine
+        spell.castStatus = "pending";
+      }
+      persist();
+      toast(
+        spell.autoCast
+          ? `Auto-Cast ON · ${spell.linkedSession || focus?.linkedSession || "link session on Focus"}`
+          : "Auto-Cast OFF",
+        "success"
+      );
+      if (spell.autoCast) void runAutoCastSpell(spell, { source: "operator" });
+      void renderSpells();
+    });
+    els.spellDetailMain
+      .querySelector('[data-action="fleet-deploy-now"]')
+      ?.addEventListener("click", () => {
+        // Clipboard-first manual cast — no HTTP inject
+        void manualSendSpellToSession(spell, { source: "operator" });
+      });
 
     els.spellDetailMain
       .querySelector('[data-action="detail-teach-glyph"]')
@@ -3473,14 +4111,188 @@ function deleteSpell(spellId) {
 }
 
 /**
- * Two-tap clear-all for current Focus only — seals/removes Active queue spells.
- * History (status sent) is kept.
+ * Full spellbook export for external AI analysis.
+ * Every spell on this Focus (Active + Cast History + any other status).
+ * Magic explanation + full payload. Clipboard only — no delivery, no mutations.
+ */
+function formatSpellbookForCopy(spells, focus = null) {
+  const list = Array.isArray(spells) ? spells.slice() : [];
+  // Stable order: Active queue first, then sealed/history, then rest
+  list.sort((a, b) => {
+    const aSealed = spellIsSealed(a) ? 1 : 0;
+    const bSealed = spellIsSealed(b) ? 1 : 0;
+    if (aSealed !== bSealed) return aSealed - bSealed;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+
+  const focusName = String(focus?.name || "Focus").trim() || "Focus";
+  const channel =
+    typeof getSealedChannel === "function"
+      ? getSealedChannel(focus) || "Open"
+      : focus?.channel || "Open";
+  const activeN = list.filter((s) => spellIsActiveQueue(s)).length;
+  const historyN = list.filter((s) => spellIsSealed(s)).length;
+
+  const header = [
+    `# GRIMOIRE · Spellbook`,
+    ``,
+    `This is a complete magic explanation of every spell in the spellbook for this Focus.`,
+    `Paste into another AI (Session0 / Hermes / peer) for inspection, audit, or counsel.`,
+    `Read-only clipboard export. No HTTP delivery. Manual cast doctrine. Jacob is the crown.`,
+    ``,
+    `**Focus:** ${focusName}`,
+    `**Channel:** ${channel}`,
+    `**Linked session:** ${focus?.linkedSession || "—"}`,
+    `**Spell count:** ${list.length} (Active ${activeN} · History ${historyN} · other ${Math.max(0, list.length - activeN - historyN)})`,
+    `**Generated:** ${new Date().toISOString()}`,
+  ].join("\n");
+
+  if (!list.length) {
+    return `${header}\n\n(empty spellbook — no spells on this Focus)`;
+  }
+
+  const sep = "\n\n════════════════════════════════\n\n";
+  const blocks = list.map((spell, i) => {
+    normalizeSpell(spell);
+    const title = spellFaceTitle(spell) || "Untitled spell";
+    const target = String(spell.target || focusName || "—").trim() || "—";
+    const status =
+      (typeof spellStatusLabel === "function" && spellStatusLabel(spell)) ||
+      String(spell.status || "active");
+    const queue = spellIsSealed(spell)
+      ? "Cast History"
+      : spellIsActiveQueue(spell)
+        ? "Active"
+        : "Other";
+    const essence = String(spell.essence || spell.subtitle || "").trim();
+    const full =
+      formatSpellMarkdown(spell) ||
+      String(spell.content || spell.message || "").trim() ||
+      "(empty spell content)";
+
+    return [
+      `## Spell ${i + 1} of ${list.length} — ${title}`,
+      ``,
+      `**Title:** ${title}`,
+      `**Target:** ${target}`,
+      `**Status:** ${status}`,
+      `**Queue:** ${queue}`,
+      spell.category ? `**Category:** ${spell.category}` : null,
+      spell.kind ? `**Kind:** ${spell.kind}` : null,
+      spell.iteration ? `**Version:** v${spell.iteration}` : null,
+      essence ? `**Intent / essence:** ${essence}` : null,
+      spell.linkedSession || focus?.linkedSession
+        ? `**Linked session:** ${spell.linkedSession || focus.linkedSession}`
+        : null,
+      ``,
+      `### Magic explanation (full spell text)`,
+      full,
+    ]
+      .filter((line) => line != null)
+      .join("\n");
+  });
+
+  return `${header}\n\n${blocks.join(sep)}`;
+}
+
+/**
+ * Copy spellbook — every spell on this Focus to clipboard for external AI analysis.
+ * No HTTP. No delivery. No app mutations.
+ * Success UX: menu closes (button goes away). Failures keep menu open + toast.
+ * Prefer SYNC clipboard so menu-click gesture is not lost to await.
+ */
+function copySpellbook() {
+  try {
+    const convo = activeConvo();
+    if (!convo) {
+      toast("Select a focus first", "");
+      return { ok: false, reason: "no_focus" };
+    }
+
+    let book = [];
+    try {
+      book = spellsFor(convo.id) || [];
+    } catch (err) {
+      console.warn("[copy-spellbook] spellsFor failed", err);
+    }
+    if (!book.length && Array.isArray(state.spells)) {
+      const nameKey = String(convo.name || "").toLowerCase();
+      book = state.spells.filter(
+        (s) =>
+          s &&
+          (s.conversationId === convo.id ||
+            String(s.target || "").toLowerCase() === nameKey)
+      );
+    }
+
+    if (!book.length) {
+      toast("Spellbook is empty on this Focus", "");
+      return { ok: false, reason: "empty" };
+    }
+
+    let payload = "";
+    try {
+      payload = formatSpellbookForCopy(book, convo);
+    } catch (err) {
+      console.error("[copy-spellbook] format failed", err);
+      toast("Spellbook format failed", "");
+      return { ok: false, reason: "format", error: err };
+    }
+
+    if (!String(payload || "").trim()) {
+      toast("Spellbook export was empty", "");
+      return { ok: false, reason: "empty_payload" };
+    }
+
+    // Sync first — keeps user-gesture; success = menu closes
+    let copied = copyTextToClipboardSync(payload);
+    if (!copied && navigator.clipboard?.writeText) {
+      // Last resort async (may fail outside gesture in some browsers)
+      navigator.clipboard.writeText(payload).then(
+        () => setSpellsTitleMenuOpen(false),
+        () => toast("Copy failed — clipboard blocked", "")
+      );
+      // Don't close yet; async will close on resolve
+      return { ok: true, count: book.length, method: "clipboard-async", pending: true };
+    }
+    if (!copied) {
+      toast("Copy failed — clipboard blocked", "");
+      return { ok: false, reason: "clipboard" };
+    }
+
+    setSpellsTitleMenuOpen(false);
+    return {
+      ok: true,
+      count: book.length,
+      method: "clipboard",
+      bytes: payload.length,
+    };
+  } catch (err) {
+    console.error("[copy-spellbook] fatal", err);
+    toast("Copy spellbook failed", "");
+    return { ok: false, reason: "fatal", error: err };
+  }
+}
+
+// Operator / Hermes debug: window.__grimoireCopySpellbook()
+try {
+  window.__grimoireCopySpellbook = copySpellbook;
+} catch {
+  /* ignore */
+}
+
+/**
+ * Clear Active — removes only uncast active spells for current Focus.
+ * Cast History is never touched. Two-tap confirm.
  */
 function requestClearAllSpells() {
   const convo = activeConvo();
   if (!convo) {
     toast("Select a focus first", "");
     return;
+  }
+  if (ensureSpellView() !== "active") {
+    setSpellView("active");
   }
   const key = "clear-all";
   if (pendingDeletes.has(key)) {
@@ -3490,10 +4302,11 @@ function requestClearAllSpells() {
 
     const ready = activeSpellsFor(convo.id);
     const removeIds = new Set(ready.map((s) => s.id));
+    // Only drop active-queue spells; history/sealed stay intact
     state.spells = state.spells.filter((s) => {
       if (s.conversationId !== convo.id) return true;
       if (!removeIds.has(s.id)) return true;
-      return false; // drop active queue entirely
+      return false;
     });
     // Strip embedded spell messages for removed ids
     convo.messages = (convo.messages || []).filter(
@@ -3502,10 +4315,14 @@ function requestClearAllSpells() {
 
     persist();
     renderAll();
-    syncFocusIntelligenceFile(convo, "SPELLS_CLEARED", `Cleared ${removeIds.size} active spell(s)`);
+    syncFocusIntelligenceFile(
+      convo,
+      "SPELLS_CLEARED",
+      `Cleared ${removeIds.size} uncast active spell(s) — Cast History intact`
+    );
     toast(
       removeIds.size
-        ? `Cleared ${removeIds.size} active spell${removeIds.size === 1 ? "" : "s"} — history kept`
+        ? `Cleared ${removeIds.size} active spell${removeIds.size === 1 ? "" : "s"} — Cast History kept`
         : "No active spells to clear",
       "success"
     );
@@ -3684,13 +4501,15 @@ function ensureLittleChat(convo) {
 }
 
 function setSpellsTitleMenuOpen(open) {
-  const menu = els.spellsTitleMenu;
-  const btn = els.btnSpellsTitle;
-  if (!menu || !btn) return;
+  const menu = els.spellsTitleMenu || document.getElementById("spells-title-menu");
+  const btn = els.btnSpellsTitle || document.getElementById("btn-spells-title");
+  if (!menu) return;
   if (open) menu.removeAttribute("hidden");
   else menu.setAttribute("hidden", "");
-  btn.setAttribute("aria-expanded", open ? "true" : "false");
-  btn.classList.toggle("open", Boolean(open));
+  if (btn) {
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.classList.toggle("open", Boolean(open));
+  }
 }
 
 function closeComplexCraftDialog() {
@@ -4663,24 +5482,25 @@ async function handleBusRoute(convo, cmd) {
   });
 
   // Cross-focus: densen target intel into current session when routing away
+  // FULL BODY — vault never gets payload.slice / preview (sev-01-bus-relay-full-body)
   let relayNote = "";
   if (target && target.id !== convo.id) {
     const relay = await relayIntelBetweenFocuses(target, convo, payload);
     if (relay?.text) relayNote = `\n\n---\n${relay.text}`;
-    // Also append relay receipt onto the *receiving* focus vault
+    // Also append relay receipt onto the *receiving* focus vault (full payload)
     void queueAutoWriteBack(target, {
       eventType: "BUS_ROUTE_RECEIVED",
       body: [
         `**Bus route received** from **${convo.name}** · \`${channel}\``,
         ``,
-        payload.slice(0, 4000),
+        payload,
         relay?.text ? `\n---\n${relay.text}` : "",
       ]
         .filter(Boolean)
         .join("\n"),
       source: convo.name || "user",
       category: "relationship",
-      tags: ["bus", "route", "auto-write"],
+      tags: ["bus", "route", "auto-write", "full-body"],
       refreshScrollImmediate: true,
       silentToast: true,
     });
@@ -4729,18 +5549,21 @@ async function handleBusRoute(convo, cmd) {
     /* non-fatal */
   }
 
+  // Chat ack may summarize; vault already received full payload via densen/relay
+  const chatPreview =
+    payload.length > 400 ? `${payload.slice(0, 400)}…` : payload;
   addBusReply(
     convo,
     [
       `**Bus route** → **${node.name}** · \`${channel}\``,
-      payload ? `> ${payload.slice(0, 400)}` : "",
+      payload ? `> ${chatPreview}` : "",
       target
-        ? `Switched active Focus to **${target.name}**. Message densened to vault.`
+        ? `Switched active Focus to **${target.name}**. Full message densened to vault (no truncation).`
         : `Node is on SCROLL LIST but has no live Focus yet — vault entry densened at \`${node.intel_file_path}\`.`,
       densen?.result?.method === "filesystem"
-        ? `_Vault written · \`${densen.result.fileName || "intelligence.md"}\`_`
+        ? `Vault written · \`${densen.result.fileName || "intelligence.md"}\` (full body)`
         : densen?.result?.method === "memory"
-          ? `_Intel densened in memory — link 📁 for disk._`
+          ? `Intel densened in memory — link 📁 for disk.`
           : "",
       relayNote,
     ]
@@ -4754,6 +5577,574 @@ async function handleBusRoute(convo, cmd) {
 
   persist();
   renderAll();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Autonomous /msg · self-message loops · governance (Jacob is the crown)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** In-flight timer ids for self-message loops: focusId → interval id */
+const selfMessageLoopTimers = new Map();
+
+const MSG_HELP = [
+  `**Autonomous messaging**`,
+  ``,
+  `\`/msg self <message>\` — message this focus (self chain)`,
+  `\`/msg <node> <message>\` — deliver to another focus (no UI switch)`,
+  `\`/msg "Wizard King" <message>\` — multi-word node names`,
+  `\`/msgloop 60 <message>\` — self-message every 60s (min 15s)`,
+  `\`/msgloop stop\` · \`/msgloop status\``,
+  ``,
+  `_All deliveries auto-write vault YAML frontmatter. No AI may git push, build, or execute the app — **Jacob is the crown**._`,
+].join("\n");
+
+/**
+ * Resolve /msg target focus. "self" → sender. Multi-word via targetRest.
+ */
+function resolveMsgTarget(fromFocus, cmd) {
+  if (!cmd) return null;
+  const t = String(cmd.target || "").trim();
+  if (!t) return null;
+  if (/^self$/i.test(t)) return fromFocus;
+
+  // Prefer multi-word match against live focuses when targetRest present
+  const candidates = (state.conversations || []).filter((c) => isVisibleFocus(c));
+  if (cmd.targetRest) {
+    const rest = String(cmd.targetRest || "").toLowerCase();
+    // Longest name match first
+    const ranked = candidates
+      .map((c) => ({ c, n: String(c.name || "").trim() }))
+      .filter((x) => x.n)
+      .sort((a, b) => b.n.length - a.n.length);
+    for (const { c, n } of ranked) {
+      const nl = n.toLowerCase();
+      if (rest === nl || rest.startsWith(nl + " ")) {
+        const message = rest.slice(n.length).trim();
+        return { focus: c, message: message || cmd.message || "" };
+      }
+    }
+  }
+
+  const q = t.toLowerCase();
+  let hit =
+    candidates.find((c) => String(c.name || "").toLowerCase() === q) ||
+    candidates.find((c) => String(c.name || "").toLowerCase().includes(q)) ||
+    candidates.find((c) => String(c.id || "").toLowerCase() === q) ||
+    null;
+  if (hit) return { focus: hit, message: cmd.message || "" };
+  return null;
+}
+
+/**
+ * Deliver /msg without switching active UI focus.
+ * Always vault-writes via densenMsgDelivery / queueAutoWriteBack (YAML).
+ */
+async function deliverMsg(fromFocus, targetFocus, message, opts = {}) {
+  if (!fromFocus || !targetFocus) {
+    return { ok: false, reason: "missing_focus" };
+  }
+  const body = String(message || "").trim();
+  if (!body) return { ok: false, reason: "empty" };
+
+  const source = String(opts.source || "operator").toLowerCase();
+  const kind = opts.kind || (fromFocus.id === targetFocus.id ? "msg-self" : "msg");
+  const depth = Number(opts.depth) || 0;
+  if (depth > 3) {
+    return { ok: false, reason: "depth_cap" };
+  }
+
+  // Governance gate on AI-originated bodies
+  if (source === "ai" || source === "self-loop" || source === "autonomous") {
+    const gate = assertAiGovernance(body, {
+      source: "ai",
+      actor: fromFocus.name || "AI node",
+    });
+    if (!gate.allowed) {
+      if (opts.silent !== true) {
+        addBusReply(fromFocus, gate.reason);
+      }
+      void queueAutoWriteBack(fromFocus, {
+        eventType: "GOVERNANCE_BLOCK",
+        body: gate.reason,
+        source: "Grimoire",
+        category: "doctrine",
+        tags: ["governance", gate.action, "auto-write"],
+        silentToast: true,
+      });
+      return { ok: false, reason: "governance", action: gate.action };
+    }
+  }
+
+  const self = fromFocus.id === targetFocus.id;
+  const channel = getSealedChannel(targetFocus);
+
+  // Record on sender (outbound receipt) — skip double user bubble when operator typed /msg
+  if (opts.recordOutbound !== false) {
+    fromFocus.messages = fromFocus.messages || [];
+    if (opts.rawText && opts.recordRawUser) {
+      fromFocus.messages.push({
+        id: uid("msg"),
+        role: "user",
+        text: opts.rawText,
+        ts: Date.now(),
+        kind: "msg-cmd",
+      });
+    }
+  }
+
+  // Inbound on target (no focus switch)
+  targetFocus.messages = targetFocus.messages || [];
+  targetFocus.messages.push({
+    id: uid("msg"),
+    role: self ? "user" : "user",
+    text: self
+      ? body
+      : `[from ${fromFocus.name}] ${body}`,
+    ts: Date.now(),
+    kind: self ? "msg-self" : "msg-inbound",
+    fromFocusId: fromFocus.id,
+    fromFocusName: fromFocus.name,
+  });
+
+  const ack = self
+    ? [
+        `**Self-message** densened on **${targetFocus.name}**.`,
+        `Vault auto-write (YAML frontmatter) queued.`,
+        opts.loopIteration != null
+          ? `Loop iteration **${opts.loopIteration}**.`
+          : `_Recursive chains: \`/msgloop 60 <prompt>\`_`,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        `** /msg ** delivered **${fromFocus.name}** → **${targetFocus.name}** · \`${channel}\`.`,
+        `No UI focus switch. Intelligence densened on receiver.`,
+      ].join("\n");
+
+  targetFocus.messages.push({
+    id: uid("msg"),
+    role: "grimoire",
+    text: ack,
+    ts: Date.now(),
+    kind: "msg-ack",
+  });
+
+  // Vault write — full body, YAML frontmatter via auto-write loop
+  const densen = await densenMsgDelivery(targetFocus, body, {
+    from: fromFocus.name || "user",
+    source: source === "operator" || source === "user" ? "user" : source,
+    kind,
+    self,
+    channel,
+    loopIteration: opts.loopIteration,
+    category: self ? "identity" : "relationship",
+  });
+
+  if (densen?.blocked) {
+    targetFocus.messages.push({
+      id: uid("msg"),
+      role: "grimoire",
+      text: densen.reason || "**Governance blocked** this /msg.",
+      ts: Date.now(),
+      kind: "governance",
+    });
+  }
+
+  // Outbound receipt on sender when cross-focus
+  if (!self) {
+    void queueAutoWriteBack(fromFocus, {
+      eventType: "MSG_SENT",
+      body: [
+        `** /msg sent** → **${targetFocus.name}** · \`${channel}\``,
+        ``,
+        body,
+      ].join("\n"),
+      source: fromFocus.name || "user",
+      category: "relationship",
+      tags: ["msg", "outbound", "auto-write"],
+      silentToast: true,
+    });
+  }
+
+  touchFocus(targetFocus);
+  if (!self) touchFocus(fromFocus);
+  persist();
+  // Only re-render chat if sender or target is active (avoid surprise switch)
+  if (
+    state.activeId === fromFocus.id ||
+    state.activeId === targetFocus.id
+  ) {
+    renderChat();
+    renderConvoList();
+  } else {
+    renderConvoList();
+  }
+
+  if (densen?.result?.method === "filesystem" && densen?.result?.ok !== false) {
+    if (opts.silentToast !== true) toastVaultWritten(targetFocus.name || "");
+  }
+
+  activityPing(
+    self
+      ? `✦ Self-msg · ${targetFocus.name}`
+      : `✦ /msg ${fromFocus.name} → ${targetFocus.name}`
+  );
+
+  return { ok: !densen?.blocked, densen, self, target: targetFocus };
+}
+
+async function handleMsgCommand(convo, cmd, rawText, opts = {}) {
+  if (!convo || !cmd) return;
+  const source = opts.source || "operator";
+
+  if (cmd.op === "help") {
+    convo.messages = convo.messages || [];
+    convo.messages.push({
+      id: uid("msg"),
+      role: "user",
+      text: rawText,
+      ts: Date.now(),
+      kind: "msg-cmd",
+    });
+    addBusReply(convo, MSG_HELP);
+    return;
+  }
+
+  if (isFocusLocked(convo)) {
+    addBusReply(
+      convo,
+      "**Locked — link vault folder first.**\nUse **Create my path** before `/msg`."
+    );
+    return;
+  }
+
+  convo.messages = convo.messages || [];
+  convo.messages.push({
+    id: uid("msg"),
+    role: "user",
+    text: rawText,
+    ts: Date.now(),
+    kind: "msg-cmd",
+  });
+  touchFocus(convo);
+
+  const resolved = resolveMsgTarget(convo, cmd);
+  if (!resolved || !resolved.focus) {
+    addBusReply(
+      convo,
+      [
+        `** /msg ** — unknown node **${cmd.target}**.`,
+        `Try \`/bus list\` for SCROLL nodes, or \`/msg self <text>\`.`,
+      ].join("\n")
+    );
+    persist();
+    renderChat();
+    return;
+  }
+
+  const message = resolved.message != null ? resolved.message : cmd.message;
+  if (!String(message || "").trim()) {
+    addBusReply(
+      convo,
+      `** /msg ** needs a body.\nUsage: \`/msg ${cmd.target || "self"} <message>\``
+    );
+    return;
+  }
+
+  const result = await deliverMsg(convo, resolved.focus, message, {
+    source,
+    recordOutbound: false,
+    kind: resolved.focus.id === convo.id ? "msg-self" : "msg",
+    depth: opts.depth || 0,
+  });
+
+  if (result?.ok) {
+    addBusReply(
+      convo,
+      resolved.focus.id === convo.id
+        ? `**Self-message** delivered to **${convo.name}**. Vault write queued.`
+        : `** /msg ** → **${resolved.focus.name}** delivered (no focus switch). Vault densened.`
+    );
+  }
+  setBusStatus("msg");
+  persist();
+  renderChat();
+  renderConvoList();
+}
+
+async function handleMsgLoopCommand(convo, cmd, rawText, opts = {}) {
+  if (!convo || !cmd) return;
+  const loop = ensureSelfMessageLoop(convo);
+
+  convo.messages = convo.messages || [];
+  convo.messages.push({
+    id: uid("msg"),
+    role: "user",
+    text: rawText,
+    ts: Date.now(),
+    kind: "msgloop-cmd",
+  });
+  touchFocus(convo);
+
+  if (cmd.op === "help") {
+    addBusReply(
+      convo,
+      [
+        MSG_HELP,
+        cmd.error ? `\n_${cmd.error}_` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+    return;
+  }
+
+  if (cmd.op === "status") {
+    addBusReply(
+      convo,
+      loop.enabled
+        ? [
+            `**Self-message loop · active** on **${convo.name}**`,
+            `Interval: **${Math.round(loop.intervalMs / 1000)}s**`,
+            `Iteration: **${loop.iteration}** / ${loop.maxIterations}`,
+            `Message: ${loop.message.slice(0, 200)}`,
+            `Last fired: ${loop.lastFiredAt ? new Date(loop.lastFiredAt).toLocaleString() : "never"}`,
+          ].join("\n")
+        : `**Self-message loop · idle** on **${convo.name}**.\nStart: \`/msgloop 60 <message>\``
+    );
+    return;
+  }
+
+  if (cmd.op === "stop") {
+    stopSelfMessageLoop(convo);
+    addBusReply(convo, `**Self-message loop stopped** on **${convo.name}**.`);
+    void queueAutoWriteBack(convo, {
+      eventType: "MSG_LOOP_STOP",
+      body: `Self-message loop stopped by ${opts.source || "operator"}.`,
+      source: "Grimoire",
+      category: "node_intel",
+      tags: ["msgloop", "stop", "auto-write"],
+      silentToast: true,
+    });
+    return;
+  }
+
+  if (cmd.op === "start") {
+    // Governance on loop body for AI
+    if (opts.source === "ai" || opts.source === "autonomous") {
+      const gate = assertAiGovernance(cmd.message, {
+        source: "ai",
+        actor: convo.name,
+      });
+      if (!gate.allowed) {
+        addBusReply(convo, gate.reason);
+        return;
+      }
+    }
+    startSelfMessageLoop(convo, {
+      intervalMs: cmd.intervalMs,
+      message: cmd.message,
+      source: opts.source || "operator",
+    });
+    addBusReply(
+      convo,
+      [
+        `**Self-message loop started** on **${convo.name}**`,
+        `Every **${Math.round((cmd.intervalMs || 60000) / 1000)}s** → self densen`,
+        `Message: ${String(cmd.message).slice(0, 240)}`,
+        `Max iterations: **${ensureSelfMessageLoop(convo).maxIterations}** · \`/msgloop stop\` to halt`,
+      ].join("\n")
+    );
+    void queueAutoWriteBack(convo, {
+      eventType: "MSG_LOOP_START",
+      body: [
+        `Self-message loop started.`,
+        `Interval: ${cmd.intervalMs}ms`,
+        `Message: ${cmd.message}`,
+      ].join("\n"),
+      source: "Grimoire",
+      category: "identity",
+      tags: ["msgloop", "start", "auto-write"],
+      silentToast: true,
+    });
+    // Fire first tick immediately for recursive chain kickoff
+    void fireSelfMessageLoopTick(convo);
+  }
+}
+
+function stopSelfMessageLoop(focus) {
+  if (!focus) return;
+  const loop = ensureSelfMessageLoop(focus);
+  loop.enabled = false;
+  const tid = selfMessageLoopTimers.get(focus.id);
+  if (tid) {
+    clearInterval(tid);
+    selfMessageLoopTimers.delete(focus.id);
+  }
+  persist();
+}
+
+function startSelfMessageLoop(focus, { intervalMs, message, source } = {}) {
+  if (!focus) return;
+  const loop = ensureSelfMessageLoop(focus);
+  // Clear prior timer
+  const prev = selfMessageLoopTimers.get(focus.id);
+  if (prev) clearInterval(prev);
+
+  loop.enabled = true;
+  loop.intervalMs = Math.max(15000, Number(intervalMs) || 60000);
+  loop.message = String(message || loop.message || "").trim();
+  loop.iteration = 0;
+  loop.startedAt = Date.now();
+  loop.lastFiredAt = 0;
+  loop.source = source || "operator";
+
+  const tid = setInterval(() => {
+    void fireSelfMessageLoopTick(focus);
+  }, loop.intervalMs);
+  selfMessageLoopTimers.set(focus.id, tid);
+  persist();
+}
+
+async function fireSelfMessageLoopTick(focus) {
+  if (!focus) return;
+  // Re-resolve from state in case of reload
+  const live =
+    state.conversations.find((c) => c.id === focus.id) || focus;
+  const loop = ensureSelfMessageLoop(live);
+  if (!loop.enabled || !loop.message) {
+    stopSelfMessageLoop(live);
+    return;
+  }
+  if (loop.iteration >= loop.maxIterations) {
+    stopSelfMessageLoop(live);
+    live.messages = live.messages || [];
+    live.messages.push({
+      id: uid("msg"),
+      role: "grimoire",
+      text: `**Self-message loop complete** after **${loop.iteration}** iterations (max reached).`,
+      ts: Date.now(),
+      kind: "msgloop-done",
+    });
+    void queueAutoWriteBack(live, {
+      eventType: "MSG_LOOP_COMPLETE",
+      body: `Self-message loop hit maxIterations (${loop.maxIterations}).`,
+      source: "Grimoire",
+      category: "node_intel",
+      tags: ["msgloop", "complete", "auto-write"],
+      silentToast: true,
+    });
+    persist();
+    if (state.activeId === live.id) renderChat();
+    return;
+  }
+
+  loop.iteration += 1;
+  loop.lastFiredAt = Date.now();
+  const body = [
+    loop.message,
+    ``,
+    `_self-loop · iteration ${loop.iteration}/${loop.maxIterations}_`,
+  ].join("\n");
+
+  await deliverMsg(live, live, body, {
+    source: "self-loop",
+    kind: "msg-loop",
+    loopIteration: loop.iteration,
+    recordOutbound: false,
+    silentToast: true,
+    depth: 0,
+  });
+  persist();
+}
+
+/**
+ * Restore self-message loop timers after page load (persisted enabled loops).
+ */
+function restoreSelfMessageLoops() {
+  for (const c of state.conversations || []) {
+    const loop = ensureSelfMessageLoop(c);
+    if (!loop.enabled || !loop.message) continue;
+    if (loop.iteration >= loop.maxIterations) {
+      loop.enabled = false;
+      continue;
+    }
+    const prev = selfMessageLoopTimers.get(c.id);
+    if (prev) clearInterval(prev);
+    const tid = setInterval(() => {
+      void fireSelfMessageLoopTick(c);
+    }, loop.intervalMs);
+    selfMessageLoopTimers.set(c.id, tid);
+  }
+}
+
+/**
+ * Extract and execute /msg · /msgloop lines embedded in AI/grimoire replies.
+ * Caps at 3 directives per reply; depth-limited to prevent runaway chains.
+ */
+async function executeEmbeddedMsgDirectives(fromFocus, text, opts = {}) {
+  if (!fromFocus || !text) return [];
+  const depth = Number(opts.depth) || 0;
+  if (depth > 2) return [];
+  const source = opts.source || "ai";
+  const lines = String(text).split(/\n/);
+  const cmds = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t.startsWith("/")) continue;
+    const loopCmd = parseMsgLoopCommand(t);
+    if (loopCmd && loopCmd.op !== "help") {
+      cmds.push({ type: "loop", cmd: loopCmd, raw: t });
+      continue;
+    }
+    const msgCmd = parseMsgCommand(t);
+    if (msgCmd && msgCmd.op === "msg") {
+      cmds.push({ type: "msg", cmd: msgCmd, raw: t });
+    }
+  }
+  const limited = cmds.slice(0, 3);
+  const results = [];
+  for (const item of limited) {
+    if (item.type === "loop") {
+      await handleMsgLoopCommand(fromFocus, item.cmd, item.raw, {
+        source,
+      });
+      results.push({ type: "loop", raw: item.raw });
+      continue;
+    }
+    // Governance before AI /msg
+    if (source === "ai") {
+      const gate = assertAiGovernance(item.cmd.message || item.raw, {
+        source: "ai",
+        actor: fromFocus.name,
+      });
+      if (!gate.allowed) {
+        void queueAutoWriteBack(fromFocus, {
+          eventType: "GOVERNANCE_BLOCK",
+          body: gate.reason,
+          source: "Grimoire",
+          category: "doctrine",
+          tags: ["governance", "embedded-msg", "auto-write"],
+          silentToast: true,
+        });
+        results.push({ type: "blocked", raw: item.raw, action: gate.action });
+        continue;
+      }
+    }
+    const resolved = resolveMsgTarget(fromFocus, item.cmd);
+    if (!resolved?.focus) continue;
+    const message =
+      resolved.message != null ? resolved.message : item.cmd.message;
+    if (!String(message || "").trim()) continue;
+    const r = await deliverMsg(fromFocus, resolved.focus, message, {
+      source,
+      depth: depth + 1,
+      recordOutbound: false,
+      silentToast: true,
+    });
+    results.push({ type: "msg", raw: item.raw, ok: r?.ok });
+  }
+  return results;
 }
 
 /**
@@ -4777,7 +6168,8 @@ async function maybeBusAutoRelay(convo, userText) {
   if (!hits.length) return null;
   const parts = [];
   for (const f of hits.slice(0, 3)) {
-    const r = await relayIntelBetweenFocuses(f, convo, userText.slice(0, 120));
+    // Full userText payload to vault — no preview slice
+    const r = await relayIntelBetweenFocuses(f, convo, userText);
     if (r?.text) parts.push(r.text);
   }
   if (!parts.length) return null;
@@ -4809,6 +6201,13 @@ function sendMessage(text) {
   }
 
   const userText = userTextEarly;
+
+  // Fleet: any real engagement marks breathing Active
+  try {
+    touchFleetActivity(convo);
+  } catch {
+    /* ignore */
+  }
 
   // Cancel await-paste via typed "cancel"
   if (/^cancel$/i.test(userText)) {
@@ -4886,6 +6285,54 @@ function sendMessage(text) {
       kind: "roadmap-cmd",
     });
     void handleRoadmapCommand(convo, cmd, userText);
+    return;
+  }
+
+  // === Governance — block AI-forbidden slash verbs from chat when framed as system exec ===
+  // Operator may type these notes; they never execute app/git/build APIs from AI nodes.
+  const forbiddenHit = detectForbiddenAiAction(userText);
+  if (
+    forbiddenHit &&
+    /^\/(?:git|build|exec|run|shell)\b/i.test(userText)
+  ) {
+    const gate = assertAiGovernance(forbiddenHit, {
+      source: "ai",
+      actor: convo.name || "AI node",
+    });
+    convo.messages.push({
+      id: uid("msg"),
+      role: "user",
+      text: userText,
+      ts: Date.now(),
+      kind: "governance-attempt",
+    });
+    addBusReply(
+      convo,
+      gate.reason ||
+        "**Governance blocked.** Jacob is the crown — no AI may git push, build, or execute the app."
+    );
+    void queueAutoWriteBack(convo, {
+      eventType: "GOVERNANCE_BLOCK",
+      body: gate.reason || `Blocked ${forbiddenHit}`,
+      source: "Grimoire",
+      category: "doctrine",
+      tags: ["governance", forbiddenHit, "auto-write"],
+      silentToast: true,
+    });
+    return;
+  }
+
+  // === Autonomous /msg + /msgloop (AI-to-AI / self; no UI focus switch) ===
+  const msgLoopCmd = parseMsgLoopCommand(userText);
+  if (msgLoopCmd) {
+    void handleMsgLoopCommand(convo, msgLoopCmd, userText, {
+      source: "operator",
+    });
+    return;
+  }
+  const msgCmd = parseMsgCommand(userText);
+  if (msgCmd) {
+    void handleMsgCommand(convo, msgCmd, userText, { source: "operator" });
     return;
   }
 
@@ -4996,6 +6443,10 @@ function sendMessage(text) {
   });
   touchFocus(convo);
 
+  // Chat relay: when ON for this Focus, also copy outbound message for Hermes paste.
+  // Never HTTP. Never auto-deliver. Manual paste remains the operational loop.
+  void maybeRelayChatToClipboard(convo, userText);
+
   // Each image = nebula bloom + intel stars
   if (sentImages.length) {
     densenConstellationFromIntel(convo, sentImages.length);
@@ -5048,6 +6499,11 @@ function sendMessage(text) {
       category: "node_intel",
       tags: ["grimoire-reply", "auto-write"],
       silentToast: true, // user densen toast may also fire; cast path shows Vault written
+    });
+    // AI-to-AI: if reply embeds /msg directives, deliver without Jacob typing
+    void executeEmbeddedMsgDirectives(convo, turn.reply, {
+      source: "ai",
+      depth: 0,
     });
   }
 
@@ -7066,11 +8522,14 @@ async function densenCastSpellIntelligence(convo, spell) {
   return result;
 }
 
-/** Open BRAIN panel — read-only Cell2 Core intelligence log */
+/** Open BRAIN panel — Fleet Command orchestrator + Cell2 log */
 async function openBrainLog() {
   const cell2 = ensureCell2CoreFocus(state);
   if (els.brainOverlay) {
     els.brainOverlay.removeAttribute("hidden");
+  }
+  if (els.fleetAutonomousToggle) {
+    els.fleetAutonomousToggle.checked = Boolean(state.fleet?.autonomous);
   }
   await renderBrainLog(cell2);
 }
@@ -7082,17 +8541,161 @@ function closeBrainLog() {
 async function renderBrainLog(focus) {
   const cell2 = focus || ensureCell2CoreFocus(state);
   if (!els.brainBody) return;
-  els.brainBody.innerHTML = `<p class="brain-loading">Loading Cell2 intelligence…</p>`;
+  els.brainBody.innerHTML = `<p class="brain-loading">Loading fleet…</p>`;
   try {
+    ensureFleetCommandState(state);
+    // Refresh breathing before dashboard paint
+    for (const c of state.conversations || []) {
+      if (isVisibleFocus(c)) refreshBreathingStatus(c);
+    }
+
     const { text, method, fileName, entries } = await readCell2IntelligenceLog(cell2);
     const busLog = getBusActivityLog();
+    const fleet = buildFleetSnapshot();
     if (els.brainSub) {
-      const n = Array.isArray(entries) ? entries.length : 0;
-      els.brainSub.textContent = `${fileName || CELL2_INTEL_PATH} · ${n} memory · bus ${busLog.length} · ${method}`;
+      els.brainSub.textContent = `Session0 master · fleet ${fleet.fleetCount} · Active ${fleet.active} · Idle ${fleet.idle} · Dead ${fleet.dead} · Auto-cast ${fleet.autoCastReady} · bus ${busLog.length}`;
     }
     els.brainBody.innerHTML = "";
 
-    // Bus activity section (local message bus)
+    // ── Session0 master + Fleet dashboard ──
+    const fleetSec = document.createElement("section");
+    fleetSec.className = "fleet-dashboard-section";
+    const master = fleet.master;
+    const fleetRows = fleet.fleetRows || fleet.rows.filter((r) => !r.isMaster);
+    fleetSec.innerHTML = `
+      <h3 class="brain-bus-title">Session0 · Hermes fleet</h3>
+      <p class="fleet-motto">the scroll never forgets. the saint always remembers.</p>
+      <div class="session0-orchestrator-banner" role="status">
+        <div class="session0-orchestrator-head">
+          <span class="session0-badge is-master">Session0</span>
+          <strong>Master orchestrator</strong>
+          <span class="session0-orchestrator-role">Hermes /msg · fleet broadcast</span>
+        </div>
+        <p class="session0-orchestrator-copy">
+          GRIMOIRE sends spells to <strong>Session0</strong> only.
+          Session0 reaches fleet sessions via native Hermes <code>/msg</code>.
+          Responses consolidate back here — never message individual Hermes sessions directly.
+        </p>
+        ${
+          master
+            ? `<div class="session0-master-row">
+                <span class="breath-dot" data-breath="${escapeHtml(master.breath)}"></span>
+                <span class="fleet-focus-name">${escapeHtml(master.name)}</span>
+                <span class="fleet-session">${escapeHtml(master.session || SESSION0_NAME)}</span>
+                <span class="fleet-mission-cell">${escapeHtml(master.mission || "orchestrate fleet")}</span>
+                <span class="hermes-delivery-status" data-status="${escapeHtml(master.deliveryStatus || "idle")}">${escapeHtml(master.deliveryLabel || "idle")}</span>
+              </div>`
+            : `<p class="brain-empty session0-link-hint">No focus linked as Session0 yet. Edit a Focus → Linked session = <code>Session0</code>.</p>`
+        }
+      </div>
+      <div class="fleet-stats">
+        <span class="fleet-stat session0-stat">Session0 master</span>
+        <span class="fleet-stat">${fleet.fleetCount} fleet</span>
+        <span class="fleet-stat" data-breath="Active">${fleet.active} Active</span>
+        <span class="fleet-stat" data-breath="Idle">${fleet.idle} Idle</span>
+        <span class="fleet-stat" data-breath="Dead">${fleet.dead} Dead</span>
+        <span class="fleet-stat">${fleet.linked} linked</span>
+        <span class="fleet-stat">${fleet.working} working</span>
+      </div>
+      <h3 class="brain-bus-title fleet-nodes-title">Fleet sessions</h3>
+      <div class="fleet-table-wrap">
+        <table class="fleet-table" aria-label="Fleet focuses">
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>Breath</th>
+              <th>Focus</th>
+              <th>Session</th>
+              <th>Mission</th>
+              <th>Status</th>
+              <th>Last</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              fleetRows.length
+                ? fleetRows
+                    .map(
+                      (r) => `<tr data-focus-id="${escapeHtml(r.id)}" data-breath="${escapeHtml(r.breath)}" data-fleet-role="fleet" class="fleet-row-fleet">
+              <td><span class="fleet-role-badge is-fleet">fleet</span></td>
+              <td><span class="breath-dot" data-breath="${escapeHtml(r.breath)}"></span> ${escapeHtml(r.breath)}</td>
+              <td class="fleet-focus-name">${escapeHtml(r.name)}</td>
+              <td class="fleet-session">${escapeHtml(r.session || "—")}</td>
+              <td class="fleet-mission-cell">${escapeHtml(r.mission || "—")}</td>
+              <td>${escapeHtml(r.status)}</td>
+              <td class="fleet-last">${escapeHtml(r.lastLabel)}</td>
+              <td class="fleet-row-actions">
+                <button type="button" class="btn-sm btn-secondary" data-fleet-action="select" data-id="${escapeHtml(r.id)}">Focus</button>
+                ${
+                  r.session
+                    ? ""
+                    : `<button type="button" class="btn-sm btn-secondary" data-fleet-action="link" data-id="${escapeHtml(r.id)}">Link</button>`
+                }
+              </td>
+            </tr>`
+                    )
+                    .join("")
+                : `<tr><td colspan="8" class="brain-empty">No fleet nodes yet. Link non-Session0 Hermes sessions on focuses.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+      <div class="brain-session-send-list">
+        <h3 class="brain-bus-title">Send via Session0</h3>
+        <p class="fleet-link-hint">All sends inject Session0. Unicast targets use Session0 → native /msg. No per-session HTTP.</p>
+        ${
+          fleet.rows.filter((r) => r.session).length
+            ? fleet.rows
+                .filter((r) => r.session)
+                .map(
+                  (r) => `<div class="brain-session-send-row${r.isMaster ? " is-session0-master" : ""}" data-focus-id="${escapeHtml(r.id)}">
+              <div class="brain-session-send-meta">
+                <strong>${escapeHtml(r.name)}</strong>
+                ${r.isMaster ? `<span class="session0-badge is-master">Session0</span>` : `<span class="fleet-role-badge is-fleet">fleet</span>`}
+                <span class="fleet-session">${escapeHtml(r.session)}</span>
+                <span class="hermes-delivery-status" data-status="${escapeHtml(r.deliveryStatus || "")}">${escapeHtml(r.deliveryLabel || "")}</span>
+              </div>
+              <div class="hermes-send-row brain-hermes-send">
+                <input type="text" class="hermes-send-input" data-brain-send-input="${escapeHtml(r.id)}" placeholder="${r.isMaster ? "Broadcast via Session0…" : `Relay via Session0 → ${escapeHtml(r.session)}…`}" autocomplete="off" />
+                <button type="button" class="btn-primary btn-sm session0-send${r.isMaster ? " is-session0" : " is-fleet-node"}" data-fleet-action="send" data-id="${escapeHtml(r.id)}">${r.isMaster ? "Send to Session0" : `Send to ${escapeHtml(r.session)}`}</button>
+              </div>
+            </div>`
+                )
+                .join("")
+            : `<p class="brain-empty">No linked sessions. Edit Focus → set Linked session (Session0 = master, others = fleet).</p>`
+        }
+      </div>
+    `;
+    fleetSec.querySelectorAll("[data-fleet-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-id");
+        const action = btn.getAttribute("data-fleet-action");
+        const c = state.conversations.find((x) => x.id === id);
+        if (!c) return;
+        if (action === "select") {
+          closeBrainLog();
+          selectConvo(id);
+        } else if (action === "link") {
+          closeBrainLog();
+          selectConvo(id);
+          openEditDialog();
+          setTimeout(() => els.editLinkedSession?.focus(), 100);
+        } else if (action === "send") {
+          const input = fleetSec.querySelector(
+            `[data-brain-send-input="${CSS.escape(id)}"]`
+          );
+          const text = String(input?.value || "").trim();
+          void sendToLinkedSession(c, text).then((r) => {
+            if (r?.ok && input) input.value = "";
+            void renderBrainLog(cell2);
+          });
+        }
+      });
+    });
+    els.brainBody.appendChild(fleetSec);
+
+    // Bus activity
     const busSec = document.createElement("section");
     busSec.className = "brain-bus-section";
     const busTitle = document.createElement("h3");
@@ -7103,12 +8706,12 @@ async function renderBrainLog(focus) {
       const empty = document.createElement("p");
       empty.className = "brain-empty";
       empty.textContent =
-        "No bus events yet. Try /bus list or /bus <node> <message> in chat.";
+        "No bus events yet. Try /bus list, /msg, or fleet mission route.";
       busSec.appendChild(empty);
     } else {
       const ul = document.createElement("ul");
       ul.className = "brain-bus-log";
-      for (const ev of busLog.slice().reverse().slice(0, 40)) {
+      for (const ev of busLog.slice().reverse().slice(0, 30)) {
         const li = document.createElement("li");
         li.className = "brain-bus-item";
         li.innerHTML = `<span class="brain-bus-kind">${escapeHtml(ev.kind)}</span> <span class="brain-bus-time">${escapeHtml(
@@ -7120,13 +8723,697 @@ async function renderBrainLog(focus) {
     }
     els.brainBody.appendChild(busSec);
 
+    // Cell2 substrate log (collapsed summary)
+    const n = Array.isArray(entries) ? entries.length : 0;
+    const preWrap = document.createElement("section");
+    preWrap.className = "brain-bus-section";
+    preWrap.innerHTML = `<h3 class="brain-bus-title">Cell2 substrate · ${escapeHtml(fileName || CELL2_INTEL_PATH)} · ${n} · ${escapeHtml(method)}</h3>`;
     const pre = document.createElement("pre");
     pre.className = "brain-log";
-    pre.textContent = text || "_empty_";
-    els.brainBody.appendChild(pre);
+    pre.textContent = text || "— empty —";
+    preWrap.appendChild(pre);
+    els.brainBody.appendChild(preWrap);
     els.brainBody.scrollTop = 0;
   } catch (err) {
-    els.brainBody.innerHTML = `<p class="brain-empty">Could not load Cell2 log: ${escapeHtml(String(err?.message || err))}</p>`;
+    els.brainBody.innerHTML = `<p class="brain-empty">Could not load BRAIN: ${escapeHtml(String(err?.message || err))}</p>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fleet Command — Auto-Cast · Breathing · Orchestrator
+// Governance: AIs deliver text only. Jacob is the crown.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** @type {ReturnType<typeof setInterval>|null} */
+let breathingPollTimer = null;
+/** @type {Map<string, ReturnType<typeof setTimeout>>} */
+const autoCastTimeouts = new Map();
+
+function buildFleetSnapshot() {
+  ensureFleetCommandState(state);
+  const rows = [];
+  let active = 0;
+  let idle = 0;
+  let dead = 0;
+  let linked = 0;
+  let working = 0;
+  for (const c of state.conversations || []) {
+    if (!isVisibleFocus(c)) continue;
+    ensureFleetFocusFields(c);
+    const breath = c.breathingStatus || deriveBreathingStatus(c);
+    if (breath === "Active") active++;
+    else if (breath === "Idle") idle++;
+    else dead++;
+    const session = normalizeLinkedSessionLabel(c.linkedSession || "");
+    if (session) linked++;
+    if (c.status === "working") working++;
+    const last = Number(c.lastActivity || 0);
+    const delSt = String(c.lastDelivery?.status || "idle").toLowerCase();
+    const deliveryStatus =
+      delSt === "sent" || delSt === "failed" ? delSt : "idle";
+    const isMaster = isSession0(session);
+    rows.push({
+      id: c.id,
+      name: c.name,
+      session,
+      mission: c.currentMission || "",
+      status: c.status || "ready",
+      breath,
+      deliveryStatus,
+      deliveryLabel: deliveryStatus,
+      isMaster,
+      fleetRole: isMaster ? "master" : session ? "fleet" : "unlinked",
+      lastLabel: last
+        ? new Date(last).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "—",
+    });
+  }
+  // Session0 master first, then Dead, Active, Idle
+  const order = { Dead: 0, Active: 1, Idle: 2 };
+  rows.sort(
+    (a, b) =>
+      (b.isMaster ? 1 : 0) - (a.isMaster ? 1 : 0) ||
+      (order[a.breath] ?? 9) - (order[b.breath] ?? 9) ||
+      a.name.localeCompare(b.name)
+  );
+  const master = rows.find((r) => r.isMaster) || null;
+  const fleetRows = rows.filter((r) => !r.isMaster);
+  const autoCastReady = (state.spells || []).filter((s) => s.autoCast).length;
+  return {
+    total: rows.length,
+    active,
+    idle,
+    dead,
+    linked,
+    working,
+    autoCastReady,
+    master,
+    fleetRows,
+    fleetCount: fleetRows.filter((r) => r.session).length,
+    rows,
+  };
+}
+
+// ── Session0-routed send ───────────────────────────────────────────────────
+// Always inject Session0. Linked session = broadcast target or unicast relay.
+// No per-session HTTP. No inbox watchers. Jacob is the crown.
+
+function setDeliveryStatusUi(status) {
+  const el = els.editDeliveryStatus;
+  if (!el) return;
+  const st = status === 'sent' || status === 'failed' ? status : 'idle';
+  el.dataset.status = st;
+  el.textContent = st;
+}
+
+function syncEditHermesSendUi(focus) {
+  const row = els.editHermesSendRow;
+  if (!row) return;
+  const linked = Boolean(String(focus?.linkedSession || '').trim());
+  if (linked) row.removeAttribute('hidden');
+  else row.setAttribute('hidden', '');
+  setDeliveryStatusUi(focus?.lastDelivery?.status || 'idle');
+  const btn = els.btnSendSession;
+  if (btn) {
+    const label = spellSendTargetLabel({ linkedSession: focus?.linkedSession }, focus);
+    btn.textContent = label;
+    btn.title = isSession0(focus?.linkedSession)
+      ? "Send to Session0 (master orchestrator)"
+      : `Route via Session0 → ${normalizeLinkedSessionLabel(focus?.linkedSession)}`;
+    btn.classList.toggle("is-session0", isSession0(focus?.linkedSession));
+    btn.classList.toggle("is-fleet-node", !isSession0(focus?.linkedSession));
+  }
+}
+
+/**
+ * Clipboard-first handoff to Hermes linked session.
+ * Copies Session0 orchestration packet for manual paste — no HTTP inject,
+ * no bridge, no watcher. Manual cast remains the operational loop.
+ */
+async function sendToLinkedSession(focus, text, { silent = false } = {}) {
+  if (!focus) return { ok: false, reason: 'no_focus' };
+  ensureFleetFocusFields(focus);
+  const body = String(text || '').trim();
+  if (!body) {
+    if (!silent) toast('Message required', '');
+    return { ok: false, reason: 'empty' };
+  }
+  const linked = normalizeLinkedSessionLabel(focus.linkedSession || '');
+  // Allow send when Session0 is the implicit target even if field empty on a master focus
+  if (!linked) {
+    if (!silent) toast('Set linked session first (Session0 or fleet node)', '');
+    return { ok: false, reason: 'unlinked' };
+  }
+
+  const fleetSessions = listFleetSessions(state.conversations || []);
+  const packet = formatSession0MessagePacket(body, {
+    linkedSession: linked,
+    focus,
+    fleetSessions,
+  });
+
+  setDeliveryStatusUi('idle');
+  let status = 'failed';
+  try {
+    await copyTextToClipboard(packet);
+    status = 'sent'; // "sent" here means clipboard handoff ready — not HTTP delivered
+  } catch {
+    status = 'failed';
+  }
+
+  focus.lastDelivery = { status, at: Date.now() };
+  if (status === 'sent') {
+    focus.lastActivity = Date.now();
+    focus.breathingStatus = 'Active';
+  }
+  setDeliveryStatusUi(status);
+  persist();
+  renderConvoList();
+  if (!silent) {
+    const label = isSession0(linked)
+      ? `Copied — paste into Hermes ${SESSION0_NAME}`
+      : `Copied — paste into Hermes ${linked}`;
+    toast(status === "sent" ? label : "Copy failed", status === "sent" ? "success" : "");
+  }
+  pushBusActivity({
+    kind: "session0-copy",
+    summary:
+      status === "sent"
+        ? `Clipboard cast · **${focus.name}** → Hermes ${linked}`
+        : `Clipboard cast failed · **${focus.name}**`,
+    nodeName: focus.name,
+    localOnly: true,
+    detail: packet.slice(0, 400),
+  });
+  return { ok: status === "sent", status, method: "clipboard", linked };
+}
+
+function reviveFleetSession(focus) {
+  if (!focus) return;
+  ensureFleetFocusFields(focus);
+  focus.lastActivity = Date.now();
+  focus.breathingStatus = focus.linkedSession ? "Active" : "Idle";
+  focus.breathingNote = focus.linkedSession ? "Revived by operator" : "Link a session to revive";
+  focus.status = "ready";
+  persist();
+  renderConvoList();
+  toast(
+    focus.linkedSession
+      ? `Revived · ${focus.name} · ${focus.linkedSession}`
+      : `Marked ready · link session for ${focus.name}`,
+    "success"
+  );
+  activityPing(`✦ Fleet revive · ${focus.name}`);
+}
+
+/**
+ * Auto-Cast engine: deliver full spell text via Session0 orchestrator.
+ * Does NOT execute code. Copies Session0 packet; optional inject to Session0.
+ * Marks working → awaits consolidated Session0 reply → cast/failed.
+ * Governance: operator or autonomous fleet mode only.
+ * Never injects individual fleet Hermes sessions.
+ */
+async function runAutoCastSpell(spell, { source = "operator", force = false } = {}) {
+  if (!spell) return { ok: false };
+  // Governance: AI source cannot trigger app-side deploy pipeline mutations beyond text delivery
+  if (source === "ai") {
+    const gate = assertAiGovernance("app_execute", {
+      source: "ai",
+      actor: "Auto-Cast",
+    });
+    // Text delivery is allowed; we only block if trying to use forbidden verbs in body
+    const bodyGate = assertAiGovernance(
+      String(spell.content || spell.message || ""),
+      { source: "ai", actor: spell.target || "spell" }
+    );
+    if (!bodyGate.allowed) {
+      spell.castStatus = "failed";
+      spell.autoCastError = bodyGate.action || "governance";
+      console.error("[governance] Auto-Cast blocked payload", bodyGate.reason);
+      persist();
+      return { ok: false, reason: "governance" };
+    }
+  }
+
+  normalizeSpell(spell);
+  ensureFleetSpellFields(spell);
+  const focus =
+    resolveSpellFocus(spell, activeConvo()) ||
+    state.conversations.find(
+      (c) =>
+        isVisibleFocus(c) &&
+        String(c.name || "").toLowerCase() ===
+          String(spell.target || "").toLowerCase()
+    ) ||
+    null;
+
+  if (focus) ensureFleetFocusFields(focus);
+
+  // Default linked session → Session0 when focus has none (fleet broadcast path)
+  let session = resolveSpellLinkedSession(spell, focus);
+  if (!session) {
+    session = SESSION0_NAME;
+    spell.linkedSession = SESSION0_NAME;
+  } else {
+    spell.linkedSession = session;
+  }
+
+  const broadcast = isSession0BroadcastTarget(spell, focus);
+  const fleetSessions = listFleetSessions(state.conversations || []);
+
+  spell.castStatus = "working";
+  spell.autoCastStartedAt = Date.now();
+  spell.autoCastError = "";
+  spell.autoCastAttempts = (Number(spell.autoCastAttempts) || 0) + 1;
+  spell.awaitingReply = true;
+  spell.awaitingReplyAt = Date.now();
+  spell.session0Orchestrated = true;
+
+  if (focus) {
+    focus.status = "working";
+    focus.lastActivity = Date.now();
+    focus.breathingStatus = "Active";
+    if (!focus.currentMission) {
+      focus.currentMission = String(spell.purpose || spell.title || "").trim();
+    }
+  }
+
+  const delivery = formatSpellForSessionDelivery(spell, focus, {
+    fleetSessions,
+    mode: broadcast ? "broadcast" : "unicast",
+  });
+  let method = "clipboard";
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(delivery);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = delivery;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+  } catch (err) {
+    console.error("[fleet] auto-cast copy failed", err);
+    spell.castStatus = "failed";
+    spell.autoCastError = String(err?.message || err);
+    spell.awaitingReply = false;
+    if (focus) focus.status = "ready";
+    persist();
+    toast("Auto-Cast failed — clipboard error", "");
+    return { ok: false, reason: "clipboard", error: err };
+  }
+
+  // Manual cast doctrine: clipboard only. No HTTP inject, no bridge, no watcher.
+  // Operator pastes into Hermes Session0 — Jacob is the crown.
+  method = "clipboard";
+  if (focus) {
+    focus.lastDelivery = { status: "idle", at: Date.now() };
+  }
+
+  // Full-body vault densen of deployment
+  if (focus) {
+    void queueAutoWriteBack(focus, {
+      eventType: "FLEET_AUTO_CAST",
+      body: [
+        `**Session0 Auto-Cast · working**`,
+        `Spell: **${spellFaceTitle(spell)}**`,
+        `Orchestrator: **${SESSION0_NAME}**`,
+        `Mode: **${broadcast ? "broadcast" : `unicast → ${session}`}**`,
+        `Source: ${source}`,
+        `Method: ${method}`,
+        `Awaiting: consolidated Session0 response (paste into chat)`,
+        ``,
+        delivery,
+      ].join("\n"),
+      source: source === "operator" ? "operator" : "Grimoire",
+      category: "node_intel",
+      tags: ["fleet", "session0", "auto-cast", "full-body", "auto-write"],
+      silentToast: true,
+    });
+  }
+
+  // Timeout → failed (waiting for Session0 consolidated reply)
+  const prevT = autoCastTimeouts.get(spell.id);
+  if (prevT) clearTimeout(prevT);
+  const tid = setTimeout(() => {
+    autoCastTimeouts.delete(spell.id);
+    failAutoCastSpell(spell, "timeout — no Session0 consolidated reply");
+  }, AUTO_CAST_TIMEOUT_MS);
+  autoCastTimeouts.set(spell.id, tid);
+
+  // Wire into existing await-paste timers
+  try {
+    beginSpellAwaitReply(spell.id);
+  } catch {
+    scheduleAwaitReplyTimeout(spell.id, AUTO_CAST_TIMEOUT_MS);
+  }
+
+  persist();
+  renderSpells();
+  renderConvoList();
+  const toastLabel = isSession0(session)
+    ? `Copied — paste into Hermes ${SESSION0_NAME}`
+    : `Copied — paste into Hermes ${session}`;
+  toast(toastLabel, "success");
+  activityPing(
+    `✦ Session0 · ${spellFaceTitle(spell)} → ${broadcast ? "broadcast" : session}`
+  );
+  pushBusActivity({
+    kind: "auto-cast",
+    summary: `Session0 Auto-Cast **${spellFaceTitle(spell)}** · ${broadcast ? "broadcast" : session}`,
+    nodeName: focus?.name || spell.target,
+    channel: spell.medium || focus?.channel,
+    localOnly: true,
+    detail: delivery.slice(0, 500),
+  });
+  return { ok: true, method, session, orchestrator: SESSION0_NAME, broadcast };
+}
+
+function failAutoCastSpell(spell, reason) {
+  if (!spell) return;
+  ensureFleetSpellFields(spell);
+  if (spell.castStatus === "cast") return;
+  spell.castStatus = "failed";
+  spell.autoCastError = String(reason || "failed");
+  spell.awaitingReply = false;
+  const focus = resolveSpellFocus(spell, null);
+  if (focus) {
+    ensureFleetFocusFields(focus);
+    if (focus.status === "working") focus.status = "ready";
+  }
+  const t = autoCastTimeouts.get(spell.id);
+  if (t) {
+    clearTimeout(t);
+    autoCastTimeouts.delete(spell.id);
+  }
+  persist();
+  renderSpells();
+  activityPing(`✦ Auto-Cast failed · ${spellFaceTitle(spell)} · ${reason}`);
+}
+
+function completeAutoCastSpell(spell, { replyExcerpt = "" } = {}) {
+  if (!spell) return;
+  ensureFleetSpellFields(spell);
+  spell.castStatus = "cast";
+  spell.castTimestamp = Date.now();
+  spell.fleetDeployed = true;
+  spell.awaitingReply = false;
+  spell.autoCastError = "";
+  spell.sentAt = spell.sentAt || Date.now();
+  spell.lastCast = spell.castTimestamp;
+  spell.castCount = (Number(spell.castCount) || 0) + 1;
+  if (String(spell.status) === "ready") spell.status = "history";
+  const focus = resolveSpellFocus(spell, null);
+  if (focus) {
+    ensureFleetFocusFields(focus);
+    focus.status = "ready";
+    focus.lastActivity = Date.now();
+    focus.breathingStatus = "Active";
+    void queueAutoWriteBack(focus, {
+      eventType: "FLEET_AUTO_CAST_COMPLETE",
+      body: [
+        `**Session0 Auto-Cast · cast**`,
+        `Spell: **${spellFaceTitle(spell)}**`,
+        `Orchestrator: **${SESSION0_NAME}**`,
+        `Session: **${spell.linkedSession || focus.linkedSession || SESSION0_NAME}**`,
+        replyExcerpt ? `\n### Consolidated Session0 reply\n${replyExcerpt}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      source: "Session0",
+      category: "node_intel",
+      tags: ["fleet", "session0", "auto-cast", "cast", "auto-write"],
+      silentToast: true,
+    });
+  }
+  const t = autoCastTimeouts.get(spell.id);
+  if (t) {
+    clearTimeout(t);
+    autoCastTimeouts.delete(spell.id);
+  }
+  persist();
+  renderSpells();
+  renderConvoList();
+  activityPing(`✦ Auto-Cast cast · ${spellFaceTitle(spell)}`);
+}
+
+/**
+ * Breathing poller — recomputes Active/Idle/Dead for all linked focuses.
+ */
+function runBreathingPoll() {
+  let changed = false;
+  let newlyDead = 0;
+  for (const c of state.conversations || []) {
+    if (!isVisibleFocus(c)) continue;
+    ensureFleetFocusFields(c);
+    const prev = c.breathingStatus;
+    refreshBreathingStatus(c);
+    if (prev !== c.breathingStatus) {
+      changed = true;
+      if (c.breathingStatus === "Dead" && prev !== "Dead" && c.linkedSession) {
+        newlyDead++;
+        activityPing(`✦ Dead session · ${c.name} · ${c.linkedSession}`);
+        pushBusActivity({
+          kind: "breathing",
+          summary: `Dead · **${c.name}** · ${c.linkedSession}`,
+          nodeName: c.name,
+          localOnly: true,
+        });
+      }
+    }
+  }
+  // Autonomous auto-cast pass
+  if (state.fleet?.autonomous) {
+    void runAutonomousAutoCastPass();
+  }
+  if (changed) {
+    try {
+      persist();
+      renderConvoList();
+      if (els.brainOverlay && !els.brainOverlay.hasAttribute("hidden")) {
+        void renderBrainLog();
+      }
+    } catch (err) {
+      console.warn("[fleet] breathing poll render", err);
+    }
+  }
+  if (newlyDead > 0) {
+    toast(`${newlyDead} fleet session${newlyDead === 1 ? "" : "s"} Dead — check BRAIN`, "");
+  }
+}
+
+function startBreathingPoller() {
+  if (breathingPollTimer) clearInterval(breathingPollTimer);
+  if (state.fleet && state.fleet.pollEnabled === false) return;
+  breathingPollTimer = setInterval(runBreathingPoll, BREATHING_POLL_MS);
+  // Initial pass
+  try {
+    runBreathingPoll();
+  } catch (err) {
+    console.warn("[fleet] initial breathing poll", err);
+  }
+}
+
+/**
+ * Autonomous mode: deploy pending autoCast spells without UI input.
+ */
+async function runAutonomousAutoCastPass() {
+  if (!state.fleet?.autonomous) return;
+  const pending = (state.spells || []).filter(
+    (s) => s.autoCast && s.castStatus === "pending"
+  );
+  for (const s of pending.slice(0, 3)) {
+    await runAutoCastSpell(s, { source: "autonomous" });
+  }
+}
+
+/**
+ * BRAIN natural-language mission router.
+ */
+async function handleFleetMission(text) {
+  const plan = parseFleetMission(text);
+  ensureFleetCommandState(state);
+  state.fleet.lastMission = String(text || "").trim();
+  state.fleet.lastMissionAt = Date.now();
+
+  if (plan.op === "empty") {
+    toast("Enter a mission", "");
+    return;
+  }
+  if (plan.op === "status") {
+    await openBrainLog();
+    return;
+  }
+  if (plan.op === "autonomous") {
+    state.fleet.autonomous = Boolean(plan.enabled);
+    if (els.fleetAutonomousToggle) {
+      els.fleetAutonomousToggle.checked = state.fleet.autonomous;
+    }
+    persist();
+    toast(
+      state.fleet.autonomous
+        ? "Autonomous ON — fleet deploys without UI input"
+        : "Autonomous OFF",
+      "success"
+    );
+    if (state.fleet.autonomous) void runAutonomousAutoCastPass();
+    await renderBrainLog();
+    return;
+  }
+
+  if (plan.op === "msg") {
+    const from =
+      activeConvo() ||
+      state.conversations.find((c) => isVisibleFocus(c)) ||
+      null;
+    if (!from) {
+      toast("No focus to send from", "");
+      return;
+    }
+    const cmd = parseMsgCommand(
+      `/msg ${plan.target.includes(" ") ? `"${plan.target}"` : plan.target} ${plan.message}`
+    );
+    if (cmd) {
+      await handleMsgCommand(from, cmd, plan.raw, { source: "operator" });
+      toast(`Routed /msg → ${plan.target}`, "success");
+    }
+    await renderBrainLog();
+    return;
+  }
+
+  if (plan.op === "mission") {
+    const target = state.conversations.find(
+      (c) =>
+        isVisibleFocus(c) &&
+        String(c.name || "").toLowerCase() ===
+          String(plan.target || "").toLowerCase()
+    );
+    if (!target) {
+      toast(`Unknown focus: ${plan.target}`, "");
+      return;
+    }
+    ensureFleetFocusFields(target);
+    target.currentMission = plan.message;
+    target.lastActivity = Date.now();
+    target.status = "working";
+    target.breathingStatus = target.linkedSession ? "Active" : "Idle";
+    persist();
+    renderConvoList();
+    void queueAutoWriteBack(target, {
+      eventType: "FLEET_MISSION",
+      body: `**Fleet mission**\n${plan.message}`,
+      source: "operator",
+      category: "node_intel",
+      tags: ["fleet", "mission", "auto-write"],
+      silentToast: true,
+    });
+    // Try deploy matching ready auto-cast spell or create deploy via /msg self
+    if (target.linkedSession) {
+      const spell = (state.spells || []).find(
+        (s) =>
+          s.conversationId === target.id &&
+          s.autoCast &&
+          s.castStatus === "pending"
+      );
+      if (spell) await runAutoCastSpell(spell, { source: "operator" });
+    }
+    toast(`Mission set · ${target.name}`, "success");
+    await renderBrainLog();
+    return;
+  }
+
+  if (plan.op === "deploy") {
+    const target = state.conversations.find(
+      (c) =>
+        isVisibleFocus(c) &&
+        String(c.name || "")
+          .toLowerCase()
+          .includes(String(plan.target || "").toLowerCase())
+    );
+    if (!target) {
+      toast(`Deploy target not found: ${plan.target}`, "");
+      return;
+    }
+    const purposeKey = String(plan.spellPurpose || "").toLowerCase();
+    const spell =
+      (state.spells || []).find(
+        (s) =>
+          s.conversationId === target.id &&
+          String(s.purpose || s.title || "")
+            .toLowerCase()
+            .includes(purposeKey)
+      ) ||
+      (state.spells || []).find((s) => s.conversationId === target.id);
+    if (!spell) {
+      toast(`No spell to deploy on ${target.name}`, "");
+      return;
+    }
+    spell.autoCast = true;
+    await runAutoCastSpell(spell, { source: "operator", force: true });
+    await renderBrainLog();
+    return;
+  }
+
+  if (plan.op === "broadcast") {
+    // Set mission on all Active/Idle linked focuses; route packet through Session0 only
+    let n = 0;
+    let session0Focus = null;
+    for (const c of state.conversations || []) {
+      if (!isVisibleFocus(c) || !c.linkedSession) continue;
+      ensureFleetFocusFields(c);
+      c.currentMission = plan.message;
+      c.lastActivity = Date.now();
+      n++;
+      if (!session0Focus && isSession0(c.linkedSession)) session0Focus = c;
+    }
+    // Prefer explicit Session0 focus; else any linked focus as provenance for inject
+    const routeFocus =
+      session0Focus ||
+      (state.conversations || []).find(
+        (c) => isVisibleFocus(c) && c.linkedSession
+      ) ||
+      null;
+    if (session0Focus) {
+      await sendToLinkedSession(session0Focus, plan.message, { silent: true });
+    } else if (routeFocus) {
+      // No Session0-linked focus: clipboard handoff of Session0 broadcast packet
+      const fleetSessions = listFleetSessions(state.conversations || []);
+      const packet = formatSession0MessagePacket(plan.message, {
+        linkedSession: SESSION0_NAME,
+        focus: routeFocus,
+        fleetSessions,
+      });
+      try {
+        await copyTextToClipboard(packet);
+      } catch {
+        /* non-fatal — mission still set in state */
+      }
+    }
+    persist();
+    renderConvoList();
+    toast(
+      `Mission copied — paste into Hermes ${SESSION0_NAME} · ${n} fleet focus${n === 1 ? "" : "es"}`,
+      "success"
+    );
+    await renderBrainLog();
+  }
+}
+
+/** Touch focus activity (chat / cast) → breathing Active */
+function touchFleetActivity(focus) {
+  if (!focus || isCell2CoreFocus(focus)) return;
+  ensureFleetFocusFields(focus);
+  focus.lastActivity = Date.now();
+  if (focus.linkedSession) {
+    focus.breathingStatus = "Active";
+    focus.breathingNote = "";
   }
 }
 
@@ -8032,6 +10319,11 @@ function createConversation({ name, type, model } = {}) {
     convo.system = false;
     convo.hidden = false;
     delete convo.archetype;
+    // Operator-critical names (Wizard King / SCROLL / GRIMOIRE / Jacob) get shield
+    if (shouldBePurgeProtected(convo)) {
+      convo.purgeProtected = true;
+    }
+    ensureSelfMessageLoop(convo);
     ensureFocusOrgFields(convo, { assignFolder: true });
     ensureCertainty(convo);
     if (convo.folderId == null) {
@@ -8073,7 +10365,9 @@ function createConversation({ name, type, model } = {}) {
   }
 }
 window.__createConversation = createConversation;
+// Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
+window.__grimoireBootVersion = "session0-fleet-1";
 
 /** Guard against double-submit from capture + onclick + form */
 let _newFocusCreating = false;
@@ -8280,26 +10574,70 @@ els.littleChatInput?.addEventListener("keydown", (e) => {
   }
 });
 
-// Spells title menu → Craft complex spell (modal — no bottom dock)
-els.btnSpellsTitle?.addEventListener("click", (e) => {
+// Spells word → menu (Craft complex spell · Copy spellbook)
+// Capture-phase document delegation — always live IDs, survives cache/DOM quirks.
+function handleSpellsMenuAction(e) {
+  const t = e.target;
+  if (!t || typeof t.closest !== "function") return false;
+
+  // Title: toggle menu
+  if (t.closest("#btn-spells-title")) {
+    e.preventDefault();
+    e.stopPropagation();
+    const menu = document.getElementById("spells-title-menu");
+    const open = menu?.hasAttribute("hidden");
+    setSpellsTitleMenuOpen(Boolean(open));
+    return true;
+  }
+
+  const item = t.closest(
+    "#btn-copy-spellbook, #btn-craft-complex-spell, [data-action='copy-spellbook'], [data-action='craft-complex']"
+  );
+  if (!item) return false;
+
+  e.preventDefault();
   e.stopPropagation();
-  const open = els.spellsTitleMenu?.hasAttribute("hidden");
-  setSpellsTitleMenuOpen(Boolean(open));
-});
-els.btnCraftComplexSpell?.addEventListener("click", (e) => {
-  e.stopPropagation();
-  if (refuseIfFocusLocked(activeConvo())) return;
-  openCraftComplexSpell();
-});
+
+  const action =
+    item.getAttribute("data-action") ||
+    (item.id === "btn-copy-spellbook"
+      ? "copy-spellbook"
+      : item.id === "btn-craft-complex-spell"
+        ? "craft-complex"
+        : "");
+
+  if (action === "craft-complex") {
+    setSpellsTitleMenuOpen(false);
+    if (refuseIfFocusLocked(activeConvo())) return true;
+    openCraftComplexSpell();
+    return true;
+  }
+
+  if (action === "copy-spellbook") {
+    // Sync copy inside this click — menu closes on success inside copySpellbook()
+    copySpellbook();
+    return true;
+  }
+
+  return false;
+}
+
+document.addEventListener(
+  "click",
+  (e) => {
+    if (handleSpellsMenuAction(e)) return;
+    // Outside click closes menu
+    if (!e.target?.closest?.(".spells-title-wrap")) {
+      setSpellsTitleMenuOpen(false);
+    }
+  },
+  true
+);
+
 els.btnComplexCraftClose?.addEventListener("click", () => closeComplexCraftDialog());
 els.complexCraftDialog?.addEventListener("cancel", (e) => {
   e.preventDefault();
   closeComplexCraftDialog();
-});
-document.addEventListener("click", (e) => {
-  if (!e.target.closest?.(".spells-title-wrap")) {
-    setSpellsTitleMenuOpen(false);
-  }
 });
 
 els.btnCast?.addEventListener("click", castSpell);
@@ -8385,7 +10723,6 @@ els.btnCloseSpells?.addEventListener("click", (e) => {
   setSpellsOpen(false);
 });
 els.tabSpellsActive?.addEventListener("click", () => setSpellView("active"));
-els.tabSpellsLibrary?.addEventListener("click", () => setSpellView("library"));
 els.tabSpellsHistory?.addEventListener("click", () => setSpellView("history"));
 
 // Spell detail modal
@@ -8623,15 +10960,24 @@ els.btnCancelEdit?.addEventListener("click", () => {
   els.editDialog?.close();
 });
 
+// Chat relay toggle — per Focus, clipboard-only Hermes paste path
+els.chatRelayInput?.addEventListener("change", () => {
+  setChatRelayForActiveFocus(Boolean(els.chatRelayInput?.checked));
+});
+
 function openEditDialog() {
   const convo = activeConvo();
   if (!convo) return;
+  ensureFleetFocusFields(convo);
   els.editId.value = convo.id;
   els.editName.value = convo.name || "";
   els.editType.value = convo.type === "network" ? "network" : convo.type === "ai" ? "ai" : "person";
   const raw = convo.model || convo.channel || "none";
   els.editModel.value = ["Hermes","Claude","ChatGPT","Grok","Local","Custom"].includes(raw) ? raw : "none";
   els.editModelLabel.hidden = els.editType.value !== "ai";
+  if (els.editLinkedSession) els.editLinkedSession.value = convo.linkedSession || "";
+  if (els.editSessionMessage) els.editSessionMessage.value = "";
+  syncEditHermesSendUi(convo);
   els.editDialog?.showModal();
 }
 
@@ -8664,6 +11010,16 @@ function saveFocusEdit() {
   convo.model = newModel;
   if (newType !== "ai") convo.model = "none";
 
+  // Linked session (string only)
+  ensureFleetFocusFields(convo);
+  convo.linkedSession = String(els.editLinkedSession?.value || "").trim();
+  if (convo.linkedSession) {
+    convo.sessionLinkedAt = convo.sessionLinkedAt || Date.now();
+    convo.lastActivity = Date.now();
+  }
+  convo.channel = getSealedChannel(convo);
+  refreshBreathingStatus(convo);
+
   const id = makeFocusId(convo.name, getSealedChannel(convo));
   if (id && id !== convo.id && !state.conversations.some((c) => c.id === id)) {
     convo.id = id;
@@ -8671,7 +11027,7 @@ function saveFocusEdit() {
 
   persist();
   renderAll();
-  syncFocusIntelligenceFile(convo, "FOCUS_UPDATED", `Updated: ${convo.name} · ${getSealedChannel(convo)}`);
+  syncFocusIntelligenceFile(convo, "FOCUS_UPDATED", `Updated: ${convo.name} · ${getSealedChannel(convo)} · session ${convo.linkedSession || "—"}`);
   els.editDialog?.close();
   toast(`Updated: ${convo.name} · ${getSealedChannel(convo)}`, "success");
 }
@@ -8685,6 +11041,58 @@ els.editType?.addEventListener("change", () => {
 
 els.btnEditFocus?.addEventListener("click", () => {
   openEditDialog?.();
+});
+
+// Linked session send — Edit Focus
+els.editLinkedSession?.addEventListener("input", () => {
+  const convo =
+    state.conversations.find((c) => c.id === els.editId?.value) || activeConvo();
+  if (!convo) return;
+  // Live toggle send row while typing the link (not persisted until Update)
+  const draft = { ...convo, linkedSession: String(els.editLinkedSession.value || "").trim() };
+  syncEditHermesSendUi(draft);
+});
+els.btnSendSession?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const convo =
+    state.conversations.find((c) => c.id === els.editId?.value) || activeConvo();
+  if (!convo) return;
+  // Use field value as link if Update not pressed yet
+  const session = String(els.editLinkedSession?.value || "").trim();
+  if (session) convo.linkedSession = session;
+  const text = String(els.editSessionMessage?.value || "").trim();
+  void sendToLinkedSession(convo, text).then((r) => {
+    if (r?.ok && els.editSessionMessage) els.editSessionMessage.value = "";
+  });
+});
+els.editSessionMessage?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    els.btnSendSession?.click();
+  }
+});
+
+// Fleet mission bar (BRAIN)
+els.btnFleetMission?.addEventListener("click", () => {
+  const text = String(els.fleetMissionInput?.value || "").trim();
+  void handleFleetMission(text);
+});
+els.fleetMissionInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const text = String(els.fleetMissionInput?.value || "").trim();
+    void handleFleetMission(text);
+  }
+});
+els.fleetAutonomousToggle?.addEventListener("change", () => {
+  ensureFleetCommandState(state);
+  state.fleet.autonomous = Boolean(els.fleetAutonomousToggle.checked);
+  persist();
+  toast(
+    state.fleet.autonomous ? "Autonomous ON" : "Autonomous OFF",
+    "success"
+  );
+  if (state.fleet.autonomous) void runAutonomousAutoCastPass();
 });
 
 els.btnCopyScrollList?.addEventListener("click", async () => {
@@ -8714,19 +11122,8 @@ els.btnCopyScrollList?.addEventListener("click", async () => {
   }
 });
 
-els.btnPurgeFocus?.addEventListener("click", () => {
-  const convo = activeConvo();
-  if (!convo) {
-    toast("Select a focus to purge", "");
-    return;
-  }
-  const label = `${convo.name} · ${getSealedChannel(convo)}`;
-  const ok = window.confirm(
-    `Execute Healer purge?\n\n${label}\n\nThis is true annihilation — no tombstone, no history, no recovery. This cannot be undone.`
-  );
-  if (!ok) return;
-  deleteFocus(convo.id);
-});
+// Healer purge button removed from UI — no annihilation control in the header.
+// Focus delete remains off active spell cards; Clear Active handles uncast queue only.
 
 els.brandText?.addEventListener("click", () => {
   openAppSettings();
@@ -9754,48 +12151,116 @@ els.universeHud?.addEventListener("click", () => {
 });
 els.btnAtlasClose?.addEventListener("click", () => setAtlasOpen(false));
 
-// Sync Spells panel class + reopen button labels from saved state
-setSpellsOpen(Boolean(state.spellsOpen));
-applySidebarCollapsed(loadSidebarCollapsed());
-applyUniverseViewMode();
-// Silent merge of kind+purpose duplicates on load
-state.spells = dedupeSpells(
-  (state.spells || []).filter((s) => !isReceiptSpell(s))
-);
-// Restore copy→await-paste timers (persisted awaitingReply)
-restoreAwaitReplyTimers();
-// Boot: auto-generate curiosity + proactive ENGAGE for active Focus
-{
-  const bootFocus = activeConvo();
-  if (bootFocus) {
-    autoGenerateCuriositySpells(bootFocus, { silentToast: true });
-    autoGenerateNodeEngageSpells(bootFocus, { silentToast: true });
+// Final boot paint — isolated so a single throw cannot leave a dead UI
+(function finalBoot() {
+  try {
+    // Ensure an active focus so chat is never stuck on static empty shell
+    ensureActiveFocus(state);
+    mergeDuplicateSealedFocuses(state);
+
+    setSpellsOpen(Boolean(state.spellsOpen));
+    applySidebarCollapsed(loadSidebarCollapsed());
+    applyUniverseViewMode();
+    // Silent merge of kind+purpose duplicates on load
+    state.spells = dedupeSpells(
+      (state.spells || []).filter((s) => !isReceiptSpell(s))
+    );
+    // Restore copy→await-paste timers (persisted awaitingReply)
+    try {
+      restoreAwaitReplyTimers();
+    } catch (err) {
+      console.warn("[boot] restoreAwaitReplyTimers", err);
+    }
+    // Restore autonomous self-message loops (recursive intelligence chains)
+    try {
+      restoreSelfMessageLoops();
+    } catch (err) {
+      console.warn("[boot] restoreSelfMessageLoops", err);
+    }
+    // Fleet Command: breathing poller + autonomous auto-cast
+    try {
+      ensureFleetCommandState(state);
+      startBreathingPoller();
+    } catch (err) {
+      console.warn("[boot] fleet breathing poller", err);
+    }
+    // Boot: auto-generate curiosity + proactive ENGAGE for active Focus
+    {
+      const bootFocus = activeConvo();
+      if (bootFocus && !isFocusLocked(bootFocus)) {
+        try {
+          autoGenerateCuriositySpells(bootFocus, { silentToast: true });
+          autoGenerateNodeEngageSpells(bootFocus, { silentToast: true });
+        } catch (err) {
+          console.warn("[boot] curiosity/engage", err);
+        }
+      }
+    }
+    renderAll();
+    // Initial universe for active focus (no warp on first paint)
+    {
+      const snap = deriveFocusSnapshot(activeConvo(), state.spells);
+      setFocusUniverse(snap, { warp: false });
+      updateUniverseHudChrome(snap);
+    }
+    try {
+      persist();
+    } catch {
+      /* ignore */
+    }
+  } catch (err) {
+    console.error("[grimoire] finalBoot failed", err);
+    try {
+      window.__GrimoireErrors = window.__GrimoireErrors || [];
+      window.__GrimoireErrors.push({
+        from: "finalBoot",
+        message: String(err?.message || err),
+        stack: err?.stack || null,
+      });
+    } catch {
+      /* ignore */
+    }
+    // Last-ditch: at least paint sidebar + chat shell
+    try {
+      ensureActiveFocus(state);
+      renderConvoList();
+      renderChat();
+    } catch (err2) {
+      console.error("[grimoire] last-ditch paint failed", err2);
+    }
   }
-}
-renderAll();
-// Initial universe for active focus (no warp on first paint)
-{
-  const snap = deriveFocusSnapshot(activeConvo(), state.spells);
-  setFocusUniverse(snap, { warp: false });
-  updateUniverseHudChrome(snap);
-}
+})();
 
 // Self-init intelligence vault (creates GRIMOIRE-FocusIntelligence/)
 /* catch-wrapper for renderAll */
-(function() {
+(function () {
   var _orig = renderAll;
-  renderAll = function() {
-    try { _orig.call(this); }
-    catch (err) {
-      console.error('[renderAll] caught', err);
-      if (window.__GrimoireErrors) window.__GrimoireErrors.push({ from: 'renderAll', message: err.message, stack: err.stack });
+  renderAll = function () {
+    try {
+      _orig.call(this);
+    } catch (err) {
+      console.error("[renderAll] caught", err);
+      if (window.__GrimoireErrors)
+        window.__GrimoireErrors.push({
+          from: "renderAll",
+          message: err.message,
+          stack: err.stack,
+        });
     }
   };
 })();
 
-bootstrapIntelligenceVault().finally(() => {
-  if (activeConvo()) els.chatInput?.focus();
-});
+try {
+  bootstrapIntelligenceVault().finally(() => {
+    if (activeConvo()) els.chatInput?.focus();
+  });
+} catch (err) {
+  console.warn("[boot] bootstrapIntelligenceVault", err);
+}
 
-window.addEventListener('error', (ev) => { console.warn('[app-global] error', ev.message, ev.filename, ev.lineno); });
-window.addEventListener('unhandledrejection', (ev) => { console.warn('[app-global] unhandledrejection', ev.reason); });
+window.addEventListener("error", (ev) => {
+  console.warn("[app-global] error", ev.message, ev.filename, ev.lineno);
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  console.warn("[app-global] unhandledrejection", ev.reason);
+});

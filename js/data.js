@@ -175,8 +175,221 @@ export function parseBusCommand(text) {
   return null;
 }
 
+/**
+ * Parse autonomous AI-to-AI / self message command.
+ * Supports:
+ *   /msg self <message>
+ *   /msg <node> <message>
+ *   /msg "Wizard King" <message>
+ * Does not switch UI focus — pure delivery + vault densen.
+ * @returns {null | { op: string, target?: string, message?: string, targetRest?: string, raw: string }}
+ */
+export function parseMsgCommand(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const m = raw.match(/^\/msg(?:\s+(.*))?$/i);
+  if (!m) return null;
+  const rest = String(m[1] || "").trim();
+  if (!rest || /^(help|\?)$/i.test(rest)) {
+    return { op: "help", raw };
+  }
+  // /msg self <message>
+  if (/^self\b/i.test(rest)) {
+    const message = rest.replace(/^self\s*/i, "").trim();
+    return { op: "msg", target: "self", message, raw };
+  }
+  // /msg "Multi Word Node" body
+  const quoted = rest.match(/^"([^"]+)"\s*(.*)$/);
+  if (quoted) {
+    return {
+      op: "msg",
+      target: quoted[1].trim(),
+      message: String(quoted[2] || "").trim(),
+      raw,
+    };
+  }
+  const sp = rest.indexOf(" ");
+  if (sp < 0) {
+    return { op: "msg", target: rest, message: "", raw };
+  }
+  return {
+    op: "msg",
+    target: rest.slice(0, sp).trim(),
+    message: rest.slice(sp + 1).trim(),
+    targetRest: rest, // multi-word node resolve
+    raw,
+  };
+}
+
+/**
+ * Self-message loop control (recursive intelligence chains).
+ * Supports:
+ *   /msgloop stop
+ *   /msgloop status
+ *   /msgloop start 60 <message>
+ *   /msgloop 60s <message>
+ *   /msgloop 5m <message>
+ * Min interval: 15s. Default max iterations: 50.
+ * @returns {null | { op: string, intervalMs?: number, message?: string, raw: string, error?: string }}
+ */
+export function parseMsgLoopCommand(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const m = raw.match(/^\/msgloop(?:\s+(.*))?$/i);
+  if (!m) return null;
+  const rest = String(m[1] || "").trim();
+  if (!rest || /^(help|\?)$/i.test(rest)) {
+    return { op: "help", raw };
+  }
+  if (/^stop$/i.test(rest)) return { op: "stop", raw };
+  if (/^status$/i.test(rest)) return { op: "status", raw };
+
+  let body = rest;
+  if (/^start\b/i.test(body)) body = body.replace(/^start\s*/i, "").trim();
+
+  const im = body.match(
+    /^(\d+)\s*(s|sec|secs|seconds|m|min|mins|minutes)?\s+([\s\S]+)$/i
+  );
+  if (!im) {
+    return {
+      op: "help",
+      raw,
+      error: "Usage: /msgloop <seconds> <message> · /msgloop stop",
+    };
+  }
+  let intervalMs = Number(im[1]) * 1000;
+  const unit = String(im[2] || "s").toLowerCase();
+  if (unit.startsWith("m")) intervalMs = Number(im[1]) * 60 * 1000;
+  // Floor at 15s to prevent runaway recursive chains
+  if (!Number.isFinite(intervalMs) || intervalMs < 15000) intervalMs = 15000;
+  // Cap at 24h
+  if (intervalMs > 86400000) intervalMs = 86400000;
+  const message = String(im[3] || "").trim();
+  if (!message) {
+    return { op: "help", raw, error: "Message body required for /msgloop" };
+  }
+  return { op: "start", intervalMs, message, raw };
+}
+
+/**
+ * Normalize self-message loop config on a focus.
+ */
+export function ensureSelfMessageLoop(focus) {
+  if (!focus || typeof focus !== "object") return null;
+  if (!focus.selfMessageLoop || typeof focus.selfMessageLoop !== "object") {
+    focus.selfMessageLoop = {
+      enabled: false,
+      intervalMs: 60000,
+      message: "",
+      lastFiredAt: 0,
+      iteration: 0,
+      maxIterations: 50,
+      startedAt: 0,
+    };
+  }
+  const loop = focus.selfMessageLoop;
+  loop.enabled = Boolean(loop.enabled);
+  loop.intervalMs = Math.max(15000, Number(loop.intervalMs) || 60000);
+  loop.message = String(loop.message || "");
+  loop.lastFiredAt = Number(loop.lastFiredAt) || 0;
+  loop.iteration = Number(loop.iteration) || 0;
+  loop.maxIterations =
+    loop.maxIterations == null ? 50 : Math.max(1, Number(loop.maxIterations) || 50);
+  loop.startedAt = Number(loop.startedAt) || 0;
+  return loop;
+}
+
+// ─── Governance — Jacob is the crown ─────────────────────────────────────────
+
+/** Actions no AI node may invoke directly */
+export const AI_FORBIDDEN_ACTIONS = Object.freeze([
+  "git_push",
+  "build",
+  "app_execute",
+]);
+
+/**
+ * Detect forbidden system actions in free text (AI-authored directives).
+ * @returns {null | "git_push" | "build" | "app_execute"}
+ */
+export function detectForbiddenAiAction(text) {
+  const t = String(text || "");
+  if (!t.trim()) return null;
+  // git push (and force-push variants)
+  if (
+    /\bgit\s+push\b/i.test(t) ||
+    /\b\/git(?:\s+push)?\b/i.test(t) ||
+    /\bforce[- ]?push\b/i.test(t)
+  ) {
+    return "git_push";
+  }
+  // build / compile pipelines
+  if (
+    /\b(?:npm|pnpm|yarn|bun)\s+run\s+build\b/i.test(t) ||
+    /\b(?:npm|pnpm|yarn|bun)\s+run\s+(?:dist|prod|production)\b/i.test(t) ||
+    /\b(?:vite|webpack|esbuild|rollup)\s+build\b/i.test(t) ||
+    /\b\/build\b/i.test(t) ||
+    /\brun\s+the\s+build\b/i.test(t)
+  ) {
+    return "build";
+  }
+  // app / process execution
+  if (
+    /\b(?:child_process|spawnSync|execSync|execFile)\b/i.test(t) ||
+    /\b\/(?:exec|run|shell)\b/i.test(t) ||
+    /\bapp\.execute\b/i.test(t) ||
+    /\bexecute\s+the\s+app\b/i.test(t) ||
+    /\brun\s+the\s+app\b/i.test(t)
+  ) {
+    return "app_execute";
+  }
+  return null;
+}
+
+/**
+ * Governance gate: AI nodes cannot push, build, or execute the app.
+ * Operator (Jacob) is the crown — only operator-sourced actions pass for those verbs.
+ *
+ * @param {string} action - e.g. git_push | build | app_execute | free text
+ * @param {{ source?: string, actor?: string }} [ctx]
+ * @returns {{ allowed: boolean, action?: string, reason?: string }}
+ */
+export function assertAiGovernance(action, ctx = {}) {
+  const source = String(ctx.source || "ai").toLowerCase();
+  const actor = String(ctx.actor || "AI node").trim() || "AI node";
+  // Jacob / operator / user crown bypass
+  if (
+    source === "operator" ||
+    source === "jacob" ||
+    source === "user" ||
+    source === "crown"
+  ) {
+    return { allowed: true, action: action || null };
+  }
+  const detected =
+    AI_FORBIDDEN_ACTIONS.includes(action)
+      ? action
+      : detectForbiddenAiAction(action) ||
+        (typeof action === "string" && AI_FORBIDDEN_ACTIONS.includes(String(action).toLowerCase())
+          ? String(action).toLowerCase()
+          : null);
+  if (!detected) return { allowed: true, action: action || null };
+  return {
+    allowed: false,
+    action: detected,
+    reason: [
+      `**Governance blocked** · \`${detected}\``,
+      ``,
+      `**${actor}** cannot call git push, build, or app execution APIs.`,
+      `**Jacob is the crown.** Only the operator may authorize those actions.`,
+    ].join("\n"),
+  };
+}
+
 /** Cell2 Self-Intelligence — system AI substrate (not a visible Focus) */
 export const FOCUS_CORE_ID = "focus-core";
+/** Canonical Cell2 Core id (alias of FOCUS_CORE_ID) */
+export const CELL2_CORE_ID = FOCUS_CORE_ID;
 export const CELL2_CORE_NAME = "Cell2 Core";
 
 /** Entity certainty levels (default unknown) */
@@ -219,6 +432,88 @@ export function isCell2CoreFocus(convo) {
   if (convo.id === CELL2_CORE_ID) return true;
   if (String(convo.name || "").trim().toLowerCase() === "focus core") return true;
   return Boolean(convo.system && convo.hidden && convo.id === CELL2_CORE_ID);
+}
+
+/**
+ * True when focus is linked to Jacob (operator / crown).
+ * Name, tags, owner, or explicit linkedToJacob / operatorLinked flags.
+ */
+export function isJacobLinkedFocus(convo) {
+  if (!convo) return false;
+  if (convo.linkedToJacob === true || convo.operatorLinked === true) return true;
+  if (String(convo.owner || "").toLowerCase().trim() === "jacob") return true;
+  if (String(convo.linkedTo || "").toLowerCase().trim() === "jacob") return true;
+  const name = String(convo.name || "").toLowerCase().trim();
+  if (/\bjacob\b/.test(name)) return true;
+  // Operator crown identity focuses
+  if (
+    name === "you" ||
+    name === "operator" ||
+    name === "cell1" ||
+    name === "cell1 operator"
+  ) {
+    return true;
+  }
+  const tags = Array.isArray(convo.tags) ? convo.tags : [];
+  for (const t of tags) {
+    const s = String(t || "").toLowerCase().trim();
+    if (
+      s === "jacob" ||
+      s === "operator" ||
+      s === "crown" ||
+      s === "you"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Operator-critical focuses that must never be auto-deleted by any AI.
+ * Wizard King · SCROLL · GRIMOIRE · YOU · Jacob-linked · Cell2 Core · explicit flag.
+ */
+export function shouldBePurgeProtected(convo) {
+  if (!convo) return false;
+  if (convo.purgeProtected === true) return true;
+  if (isCell2CoreFocus(convo)) return true;
+  if (isJacobLinkedFocus(convo)) return true;
+  const name = String(convo.name || "").trim().toLowerCase();
+  const id = String(convo.id || "").trim().toLowerCase();
+  if (name === "wizard king" || name.includes("wizard king")) return true;
+  if (name === "scroll" || id === "scroll") return true;
+  if (name === "you" || id === "you" || id === "you-open" || id === "you-operator") {
+    return true;
+  }
+  if (
+    name === "grimoire" ||
+    id === "grimoire-self" ||
+    id.startsWith("grimoire-") ||
+    /^grimoire\b/.test(name)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Runtime check — true if this focus cannot be auto-deleted */
+export function isPurgeProtected(convo) {
+  return shouldBePurgeProtected(convo);
+}
+
+/**
+ * Stamp purgeProtected: true on operator-critical focuses (idempotent).
+ * Call after load / migrate / seed.
+ */
+export function ensureCriticalPurgeProtection(state) {
+  if (!state) return;
+  for (const c of state.conversations || []) {
+    if (!c || typeof c !== "object") continue;
+    if (shouldBePurgeProtected(c)) {
+      c.purgeProtected = true;
+    }
+    ensureSelfMessageLoop(c);
+  }
 }
 
 /** Visible focuses only — Cell2 Core stays out of sidebar / New Focus */
@@ -447,10 +742,18 @@ export function sealedChannelLabel(focus) {
  */
 export function ensureScrollFocus(state) {
   if (!state) return;
-  const exists = (state.conversations || []).some((c) =>
-    /^scroll$/i.test(c.name || c.id || "")
+  const existing = (state.conversations || []).find((c) =>
+    /^scroll$/i.test(String(c.name || c.id || ""))
   );
-  if (exists) return;
+  if (existing) {
+    existing.purgeProtected = true;
+    existing.name = existing.name || "SCROLL";
+    existing.type = "eternal-intelligence";
+    existing.channel = existing.channel || existing.medium || "Hermes";
+    existing.medium = existing.medium || existing.channel || "Hermes";
+    existing.backend = existing.backend || existing.medium || "Hermes";
+    return existing;
+  }
   const focus = {
     id: "scroll",
     name: "SCROLL",
@@ -459,6 +762,7 @@ export function ensureScrollFocus(state) {
     medium: "Hermes",
     backend: "Hermes",
     aiSubtype: "Hermes",
+    purgeProtected: true,
     status: "active",
     derivedNodes: [],
     messages: [],
@@ -468,6 +772,55 @@ export function ensureScrollFocus(state) {
   };
   state.conversations = [focus, ...(state.conversations || [])];
   state.activeId = focus.id;
+  return focus;
+}
+
+/**
+ * Seed GRIMOIRE self-recursive Focus once if missing.
+ * Operator-critical — purgeProtected. Idempotent.
+ */
+export function ensureGrimoireSelfFocus(state) {
+  if (!state) return null;
+  state.conversations = state.conversations || [];
+  let focus = state.conversations.find(
+    (c) =>
+      c &&
+      (c.id === "grimoire-self" ||
+        String(c.name || "").trim().toLowerCase() === "grimoire")
+  );
+  if (focus) {
+    focus.purgeProtected = true;
+    if (!focus.medium && !focus.backend) {
+      focus.medium = "Local";
+      focus.backend = "Local";
+      focus.model = focus.model || "Local";
+    }
+    ensureSelfMessageLoop(focus);
+    return focus;
+  }
+  const seed = SEED_CONVERSATIONS.find((c) => c.id === "grimoire-self");
+  const born = Date.now();
+  focus = seed
+    ? structuredClone(seed)
+    : {
+        id: "grimoire-self",
+        name: "GRIMOIRE",
+        type: "ai",
+        medium: "Local",
+        backend: "Local",
+        model: "Local",
+        aiSubtype: "Local",
+        purgeProtected: true,
+        selfRecursive: true,
+        status: "active",
+        messages: [],
+        createdAt: born,
+        updatedAt: born,
+      };
+  focus.purgeProtected = true;
+  ensureSelfMessageLoop(focus);
+  state.conversations.push(focus);
+  return focus;
 }
 
 /**
@@ -485,6 +838,7 @@ export function ensureCell2CoreFocus(state) {
     focus.type = "ai";
     focus.system = true;
     focus.hidden = true;
+    focus.purgeProtected = true;
     focus.certainty = normalizeCertainty(focus.certainty || "confirmed");
     focus.model = focus.model || "none";
     focus.backend = focus.backend || "Open";
@@ -507,6 +861,7 @@ export function ensureCell2CoreFocus(state) {
     type: "ai",
     system: true,
     hidden: true,
+    purgeProtected: true,
     certainty: "confirmed",
     model: "none",
     backend: "Open",
@@ -541,6 +896,7 @@ export const SEED_CONVERSATIONS = [
     backend: "Hermes",
     type: "ai",
     aiSubtype: "Hermes",
+    purgeProtected: true,
     star: { x: 18, y: 26 },
     messages: [
       {
@@ -707,6 +1063,27 @@ export const SEED_CONVERSATIONS = [
         role: "grimoire",
         text: "Sealed channel: **LinkedIn Network · LinkedIn**. Public-safe only.",
         ts: Date.now() - 49990000,
+      },
+    ],
+  },
+  {
+    id: "grimoire-self",
+    name: "GRIMOIRE",
+    type: "ai",
+    medium: "Local",
+    backend: "Local",
+    model: "Local",
+    aiSubtype: "Local",
+    purgeProtected: true,
+    selfRecursive: true,
+    star: { x: 40, y: 55 },
+    messages: [
+      {
+        id: "gs-m0",
+        role: "grimoire",
+        text: "Self-recursive GRIMOIRE focus. Speak to the book about the book. Use `/msg self <note>` for autonomous self-chains; Jacob remains the crown.",
+        ts: Date.now() - 40000000,
+        kind: "alignment-directive",
       },
     ],
   },
@@ -1047,6 +1424,9 @@ export function normalizeSpell(spell) {
     spell.castTimestamp = spell.sentAt || spell.answeredAt || null;
   }
 
+  // ── Fleet Command spell fields ──
+  ensureFleetSpellFields(spell);
+
   // Lifecycle meta for detail modal (not card face)
   if (spell.lastCast == null) {
     spell.lastCast = spell.castTimestamp || spell.sentAt || spell.answeredAt || null;
@@ -1062,6 +1442,615 @@ export function normalizeSpell(spell) {
   if (!Array.isArray(spell.glyphs)) spell.glyphs = [];
 
   return spell;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fleet Command — schema (Hermes session orchestration)
+// Voice: Direct. Functional. Black/white.
+// "the scroll never forgets. the saint always remembers."
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Focus breathing lifecycle */
+export const BREATHING_STATUSES = Object.freeze(["Active", "Idle", "Dead"]);
+
+/** Focus operational state */
+export const FOCUS_OP_STATUSES = Object.freeze([
+  "ready",
+  "working",
+  "idle",
+  "blocked",
+  "offline",
+]);
+
+/** Spell auto-cast pipeline status */
+export const CAST_STATUSES = Object.freeze([
+  "pending",
+  "working",
+  "cast",
+  "failed",
+]);
+
+/** Active if engaged within this window */
+export const BREATHING_ACTIVE_MS = 5 * 60 * 1000;
+/** Idle until this; then Dead */
+export const BREATHING_IDLE_MS = 60 * 60 * 1000;
+/** Auto-cast wait for session reply before failed */
+export const AUTO_CAST_TIMEOUT_MS = 10 * 60 * 1000;
+/** Breathing poll interval */
+export const BREATHING_POLL_MS = 30 * 1000;
+
+export function normalizeBreathingStatus(v) {
+  const s = String(v || "").trim();
+  if (BREATHING_STATUSES.includes(s)) return s;
+  const low = s.toLowerCase();
+  if (low === "active" || low === "alive") return "Active";
+  if (low === "idle" || low === "sleep") return "Idle";
+  if (low === "dead" || low === "offline" || low === "down") return "Dead";
+  return "Idle";
+}
+
+export function normalizeFocusOpStatus(v) {
+  const s = String(v || "").toLowerCase().trim();
+  if (FOCUS_OP_STATUSES.includes(s)) return s;
+  if (s === "online" || s === "ok") return "ready";
+  if (s === "busy" || s === "running") return "working";
+  return "ready";
+}
+
+export function normalizeCastStatus(v) {
+  const s = String(v || "").toLowerCase().trim();
+  if (CAST_STATUSES.includes(s)) return s;
+  if (s === "sent" || s === "done" || s === "complete" || s === "history") {
+    return "cast";
+  }
+  if (s === "error" || s === "timeout") return "failed";
+  if (s === "casting" || s === "in-progress") return "working";
+  return "pending";
+}
+
+/**
+ * Fleet Focus fields — linked Hermes session, breathing, mission.
+ * Idempotent defaults for legacy localStorage entries.
+ */
+export function ensureFleetFocusFields(convo) {
+  if (!convo || typeof convo !== "object") return convo;
+
+  // linkedSession: Hermes session id/name only (empty = unlinked)
+  if (convo.linkedSession == null) {
+    convo.linkedSession = String(
+      convo.hermesSession || convo.sessionId || convo.sessionName || ""
+    ).trim();
+  } else {
+    convo.linkedSession = String(convo.linkedSession || "").trim();
+  }
+  // Last send status: idle | sent | failed
+  if (!convo.lastDelivery || typeof convo.lastDelivery !== "object") {
+    convo.lastDelivery = { status: "idle", at: 0 };
+  } else {
+    const st = String(convo.lastDelivery.status || "idle").toLowerCase();
+    convo.lastDelivery = {
+      status: st === "sent" || st === "failed" ? st : "idle",
+      at: Number(convo.lastDelivery.at) || 0,
+    };
+  }
+
+  // channel: communication medium (prefer sealed channel)
+  if (!convo.channel) {
+    try {
+      convo.channel =
+        convo.backend ||
+        convo.medium ||
+        convo.model ||
+        convo.aiSubtype ||
+        "Open";
+    } catch {
+      convo.channel = "Open";
+    }
+  }
+
+  // lastActivity: last engagement timestamp
+  if (!convo.lastActivity || !Number.isFinite(Number(convo.lastActivity))) {
+    let maxTs = Number(convo.updatedAt || convo.lastViewedAt || convo.createdAt || 0);
+    for (const m of convo.messages || []) {
+      const t = Number(m.ts || m.createdAt || 0);
+      if (t > maxTs) maxTs = t;
+    }
+    convo.lastActivity = maxTs || Date.now();
+  } else {
+    convo.lastActivity = Number(convo.lastActivity);
+  }
+
+  // currentMission: what the session is working on
+  if (convo.currentMission == null) {
+    convo.currentMission = String(convo.mission || "").trim();
+  } else {
+    convo.currentMission = String(convo.currentMission || "").trim();
+  }
+
+  // status: operational state (distinct from spell status)
+  convo.status = normalizeFocusOpStatus(convo.status || convo.opStatus || "ready");
+
+  // breathingStatus derived if missing
+  if (!convo.breathingStatus) {
+    convo.breathingStatus = deriveBreathingStatus(convo);
+  } else {
+    convo.breathingStatus = normalizeBreathingStatus(convo.breathingStatus);
+  }
+
+  // Fleet flags
+  if (typeof convo.fleetAutonomous !== "boolean") convo.fleetAutonomous = false;
+  if (convo.sessionLinkedAt == null) {
+    convo.sessionLinkedAt = convo.linkedSession ? Number(convo.createdAt || Date.now()) : null;
+  }
+  if (convo.lastBreathingCheck == null) convo.lastBreathingCheck = 0;
+  if (convo.breathingNote == null) convo.breathingNote = "";
+
+  // Chat relay: when ON, outbound chat also copies to clipboard for Hermes paste.
+  // Manual cast only — never auto-delivers. Persists per Focus.
+  if (typeof convo.chatRelay !== "boolean") {
+    convo.chatRelay = Boolean(convo.hermesChatRelay ?? convo.relayToSession ?? false);
+  }
+
+  return convo;
+}
+
+/**
+ * Derive Active | Idle | Dead from lastActivity + linkedSession.
+ */
+export function deriveBreathingStatus(convo, now = Date.now()) {
+  if (!convo) return "Dead";
+  const linked = String(convo.linkedSession || "").trim();
+  if (!linked) {
+    // Unlinked AI focuses are Idle (not Dead) — Dead means linked then gone
+    if (convo.sessionLinkedAt && !linked) return "Dead";
+    return "Idle";
+  }
+  const last = Number(convo.lastActivity || convo.updatedAt || 0) || 0;
+  const age = now - last;
+  if (age <= BREATHING_ACTIVE_MS) return "Active";
+  if (age <= BREATHING_IDLE_MS) return "Idle";
+  return "Dead";
+}
+
+/**
+ * Recompute breathing for one focus (mutates). Call from poller.
+ */
+export function refreshBreathingStatus(convo, now = Date.now()) {
+  if (!convo) return null;
+  ensureFleetFocusFields(convo);
+  const prev = convo.breathingStatus;
+  convo.breathingStatus = deriveBreathingStatus(convo, now);
+  convo.lastBreathingCheck = now;
+  if (prev === "Active" && convo.breathingStatus === "Dead") {
+    convo.breathingNote = "Session went silent — revival recommended";
+  } else if (convo.breathingStatus === "Active") {
+    convo.breathingNote = "";
+  } else if (convo.breathingStatus === "Dead" && convo.linkedSession) {
+    convo.breathingNote =
+      convo.breathingNote || "Dead session — re-link or revive Hermes";
+  }
+  return convo.breathingStatus;
+}
+
+/**
+ * Fleet Spell fields — auto-cast pipeline.
+ */
+export function ensureFleetSpellFields(spell) {
+  if (!spell || typeof spell !== "object") return spell;
+
+  // target already normalized above; keep string
+  spell.target = String(spell.target || "Focus").trim() || "Focus";
+
+  // linkedSession for delivery (may inherit from focus at cast time)
+  if (spell.linkedSession == null) {
+    spell.linkedSession = String(spell.hermesSession || spell.sessionId || "").trim();
+  } else {
+    spell.linkedSession = String(spell.linkedSession || "").trim();
+  }
+
+  if (typeof spell.autoCast !== "boolean") {
+    spell.autoCast = Boolean(spell.autoDeploy || spell.fleetAuto);
+  }
+
+  spell.castStatus = normalizeCastStatus(
+    spell.castStatus ||
+      (spell.sentAt || spell.answeredAt || spell.castTimestamp
+        ? "cast"
+        : spell.awaitingReply
+          ? "working"
+          : "pending")
+  );
+
+  if (spell.castTimestamp == null) {
+    spell.castTimestamp = spell.sentAt || spell.answeredAt || null;
+  }
+  if (spell.autoCastStartedAt == null) spell.autoCastStartedAt = null;
+  if (spell.autoCastError == null) spell.autoCastError = "";
+  if (spell.autoCastAttempts == null) spell.autoCastAttempts = 0;
+  if (typeof spell.fleetDeployed !== "boolean") spell.fleetDeployed = false;
+  if (typeof spell.session0Orchestrated !== "boolean") {
+    spell.session0Orchestrated = Boolean(
+      spell.session0Orchestrated || isSession0(spell.linkedSession)
+    );
+  }
+
+  return spell;
+}
+
+/**
+ * Migrate entire state for Fleet Command (idempotent).
+ */
+export function ensureFleetCommandState(state) {
+  if (!state) return state;
+  for (const c of state.conversations || []) {
+    ensureFleetFocusFields(c);
+    refreshBreathingStatus(c);
+  }
+  for (const s of state.spells || []) {
+    ensureFleetSpellFields(s);
+  }
+  if (!state.fleet || typeof state.fleet !== "object") {
+    state.fleet = {
+      autonomous: false,
+      lastMission: "",
+      lastMissionAt: 0,
+      pollEnabled: true,
+      version: 1,
+    };
+  } else {
+    if (typeof state.fleet.autonomous !== "boolean") state.fleet.autonomous = false;
+    if (state.fleet.lastMission == null) state.fleet.lastMission = "";
+    if (state.fleet.lastMissionAt == null) state.fleet.lastMissionAt = 0;
+    if (typeof state.fleet.pollEnabled !== "boolean") state.fleet.pollEnabled = true;
+    state.fleet.version = Number(state.fleet.version) || 1;
+  }
+  return state;
+}
+
+/**
+ * Parse natural-language fleet mission into route plan.
+ * Local-only — no external API. Jacob remains crown.
+ * @returns {{ op: string, target?: string, message?: string, spellPurpose?: string, raw: string }}
+ */
+export function parseFleetMission(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return { op: "empty", raw };
+  // /fleet … or plain mission when in BRAIN
+  const body = raw.replace(/^\/(?:fleet|mission|brain)\s+/i, "").trim() || raw;
+
+  if (/^(status|fleet|dashboard|list)\b/i.test(body)) {
+    return { op: "status", raw };
+  }
+  if (/^autonomous\s+on\b/i.test(body)) {
+    return { op: "autonomous", enabled: true, raw };
+  }
+  if (/^autonomous\s+off\b/i.test(body)) {
+    return { op: "autonomous", enabled: false, raw };
+  }
+
+  // deploy <spell words> to <node>
+  const deploy = body.match(/^deploy\s+(.+?)\s+to\s+(.+)$/i);
+  if (deploy) {
+    return {
+      op: "deploy",
+      spellPurpose: deploy[1].trim(),
+      target: deploy[2].trim(),
+      raw,
+    };
+  }
+
+  // msg / tell / send to node
+  const tell = body.match(/^(?:msg|tell|send|route)\s+(?:to\s+)?(.+?)\s*[:—-]\s*([\s\S]+)$/i);
+  if (tell) {
+    return { op: "msg", target: tell[1].trim(), message: tell[2].trim(), raw };
+  }
+  const tell2 = body.match(/^(?:msg|tell|send)\s+(\S+)\s+([\s\S]+)$/i);
+  if (tell2) {
+    return { op: "msg", target: tell2[1].trim(), message: tell2[2].trim(), raw };
+  }
+
+  // mission for <node>: <text>
+  const mission = body.match(/^(?:mission|task)\s+(?:for\s+)?(.+?)\s*[:—-]\s*([\s\S]+)$/i);
+  if (mission) {
+    return {
+      op: "mission",
+      target: mission[1].trim(),
+      message: mission[2].trim(),
+      raw,
+    };
+  }
+
+  // Default: treat as fleet-wide mission broadcast intent
+  return { op: "broadcast", message: body, raw };
+}
+
+/**
+ * Single local send endpoint (Hermes receiver).
+ * Spec: POST http://127.0.0.1:9119/api/message/inject
+ * One method. No discovery. No fallbacks. Loopback only.
+ *
+ * Fleet doctrine: inject only to Session0 (master orchestrator).
+ * Session0 uses native Hermes /msg to reach fleet sessions.
+ * GRIMOIRE never messages individual Hermes sessions directly.
+ */
+export const HERMES_LOCAL_SEND_URL =
+  "http://127.0.0.1:9119/api/message/inject";
+
+// ── Session0 · Hermes fleet orchestrator ───────────────────────────────────
+/** Canonical Hermes master-orchestrator session name */
+export const SESSION0_NAME = "Session0";
+/** Accept common aliases for linkedSession / labels */
+export const SESSION0_ALIASES = Object.freeze([
+  "session0",
+  "session-0",
+  "session_0",
+  "session 0",
+  "s0",
+  "orchestrator",
+  "hermes-session0",
+  "hermes session0",
+]);
+
+/**
+ * True when name/session refers to Session0 (master orchestrator).
+ */
+export function isSession0(nameOrSession) {
+  const s = String(nameOrSession || "").trim();
+  if (!s) return false;
+  if (/^session[\s_-]*0$/i.test(s)) return true;
+  if (/^s0$/i.test(s)) return true;
+  const low = s.toLowerCase();
+  return SESSION0_ALIASES.some((a) => a === low);
+}
+
+/**
+ * Normalize a linked session string to display form.
+ * Session0 aliases → "Session0"; others unchanged.
+ */
+export function normalizeLinkedSessionLabel(session) {
+  const s = String(session || "").trim();
+  if (!s) return "";
+  if (isSession0(s)) return SESSION0_NAME;
+  return s;
+}
+
+/**
+ * Spell / focus linked session for delivery routing.
+ */
+export function resolveSpellLinkedSession(spell, focus = null) {
+  return normalizeLinkedSessionLabel(
+    String(spell?.linkedSession || focus?.linkedSession || "").trim()
+  );
+}
+
+/**
+ * UI label for spell send action.
+ * linkedSession = Session0 (or empty fleet default) → "Send to Session0"
+ * linkedSession = specific node → "Send to [session]"
+ */
+export function spellSendTargetLabel(spell, focus = null) {
+  const session = resolveSpellLinkedSession(spell, focus);
+  if (!session || isSession0(session)) return `Send to ${SESSION0_NAME}`;
+  return `Send to ${session}`;
+}
+
+/**
+ * Whether this spell/focus routes as fleet broadcast via Session0
+ * (vs unicast one fleet node through Session0).
+ */
+export function isSession0BroadcastTarget(spell, focus = null) {
+  const session = resolveSpellLinkedSession(spell, focus);
+  return !session || isSession0(session);
+}
+
+/**
+ * Hermes inject always targets Session0. Individual linkedSession values
+ * become orchestration targets inside the payload — never direct inject IDs.
+ */
+export function resolveHermesInjectSessionId(_linkedSession) {
+  return SESSION0_NAME;
+}
+
+/**
+ * List fleet session ids (non-Session0) from conversations for orchestration packets.
+ */
+export function listFleetSessions(conversations = []) {
+  const out = [];
+  const seen = new Set();
+  for (const c of conversations || []) {
+    const s = normalizeLinkedSessionLabel(c?.linkedSession);
+    if (!s || isSession0(s)) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      session: s,
+      focusId: c.id || "",
+      focusName: String(c.name || "").trim() || s,
+    });
+  }
+  return out;
+}
+
+/**
+ * Payload for POST to HERMES_LOCAL_SEND_URL.
+ * Always injects Session0 unless explicit override (tests only).
+ */
+export function makeHermesDeliveryPayload({
+  text = "",
+  focus = null,
+  sessionId = "",
+  orchestrate = true,
+} = {}) {
+  const injectId = orchestrate
+    ? resolveHermesInjectSessionId(sessionId || focus?.linkedSession)
+    : String(sessionId || focus?.linkedSession || SESSION0_NAME).trim() ||
+      SESSION0_NAME;
+  return {
+    sessionId: injectId,
+    text: String(text || "").trim(),
+    ts: Date.now(),
+    // optional provenance (local only)
+    focusId: focus?.id || null,
+    focusName: focus?.name || null,
+    orchestrator: SESSION0_NAME,
+  };
+}
+
+/**
+ * Format full spell text for Hermes session delivery (no truncation).
+ * Wraps as Session0 orchestration packet when fleet-aware.
+ *
+ * @param {object} spell
+ * @param {object|null} focus
+ * @param {{ fleetSessions?: array, mode?: "broadcast"|"unicast" }} [opts]
+ */
+export function formatSpellForSessionDelivery(spell, focus = null, opts = {}) {
+  if (!spell) return "";
+  ensureFleetSpellFields(spell);
+  const title = String(spell.title || spell.purpose || "Spell").trim();
+  const target = String(spell.target || focus?.name || "Focus").trim();
+  const linked = resolveSpellLinkedSession(spell, focus) || SESSION0_NAME;
+  const body = String(spell.content || spell.message || "").trim();
+  const essence = String(spell.essence || spell.subtitle || "").trim();
+  const broadcast = opts.mode
+    ? opts.mode === "broadcast"
+    : isSession0BroadcastTarget(spell, focus);
+  const fleet = Array.isArray(opts.fleetSessions)
+    ? opts.fleetSessions
+    : [];
+  const fleetLines = fleet.length
+    ? fleet
+        .map(
+          (f) =>
+            `- ${f.session}${f.focusName && f.focusName !== f.session ? ` (${f.focusName})` : ""}`
+        )
+        .join("\n")
+    : "- _(no linked fleet nodes yet — Session0 still owns broadcast)_";
+
+  if (broadcast) {
+    return [
+      `# Session0 Orchestration · ${title}`,
+      ``,
+      `Role: **master orchestrator** (Session0)`,
+      `Mode: **broadcast**`,
+      `Focus: ${target}`,
+      `Channel: ${spell.medium || focus?.channel || "Open"}`,
+      essence ? `Intent: ${essence}` : null,
+      ``,
+      `## Doctrine`,
+      `- GRIMOIRE sends spells only to **Session0**`,
+      `- Session0 uses native Hermes \`/msg\` to reach fleet sessions`,
+      `- Responses flow Session0 → GRIMOIRE (consolidated)`,
+      `- Do not bypass Session0. Jacob is the crown.`,
+      ``,
+      `## Fleet targets`,
+      fleetLines,
+      ``,
+      `## Session0 instructions`,
+      `1. Broadcast the spell body below to fleet sessions via native Hermes /msg`,
+      `2. Collect replies from each session`,
+      `3. Return **one consolidated response** to GRIMOIRE (paste back into focus chat)`,
+      `4. Label each session block: ### Response from <session>`,
+      ``,
+      `---`,
+      ``,
+      `## Spell body`,
+      ``,
+      body || "_(empty spell body)_",
+      ``,
+      `---`,
+      `the scroll never forgets. the saint always remembers.`,
+    ]
+      .filter((l) => l != null)
+      .join("\n");
+  }
+
+  // Unicast: Session0 relays to one linked session via /msg
+  return [
+    `# Session0 Orchestration · ${title}`,
+    ``,
+    `Role: **master orchestrator** (Session0)`,
+    `Mode: **unicast**`,
+    `Relay target session: **${linked}**`,
+    `Focus: ${target}`,
+    `Channel: ${spell.medium || focus?.channel || "Open"}`,
+    essence ? `Intent: ${essence}` : null,
+    ``,
+    `## Doctrine`,
+    `- GRIMOIRE never injects this session directly`,
+    `- Session0 uses native Hermes \`/msg ${linked} …\` then returns the reply`,
+    `- Consolidated response densens into focus intelligence`,
+    `- Jacob is the crown.`,
+    ``,
+    `## Session0 instructions`,
+    `1. /msg **${linked}** with the spell body below`,
+    `2. Wait for that session's reply`,
+    `3. Return response to GRIMOIRE labeled: ### Response from ${linked}`,
+    ``,
+    `---`,
+    ``,
+    `## Spell body`,
+    ``,
+    body || "_(empty spell body)_",
+    ``,
+    `---`,
+    `the scroll never forgets. the saint always remembers.`,
+  ]
+    .filter((l) => l != null)
+    .join("\n");
+}
+
+/**
+ * Wrap freeform operator text for Session0 inject (mission / chat send).
+ */
+export function formatSession0MessagePacket(text, {
+  linkedSession = "",
+  focus = null,
+  fleetSessions = [],
+} = {}) {
+  const body = String(text || "").trim();
+  if (!body) return "";
+  const linked = normalizeLinkedSessionLabel(linkedSession || focus?.linkedSession);
+  const broadcast = !linked || isSession0(linked);
+  if (broadcast) {
+    const fleet = fleetSessions.length
+      ? fleetSessions.map((f) => `- ${f.session}`).join("\n")
+      : "- _(fleet empty)_";
+    return [
+      `# Session0 · fleet message`,
+      `Mode: **broadcast**`,
+      `From focus: ${focus?.name || "GRIMOIRE"}`,
+      ``,
+      `Use native Hermes /msg to reach fleet:`,
+      fleet,
+      ``,
+      `Return consolidated replies labeled ### Response from <session>`,
+      ``,
+      `---`,
+      ``,
+      body,
+      ``,
+      `---`,
+      `the scroll never forgets. the saint always remembers.`,
+    ].join("\n");
+  }
+  return [
+    `# Session0 · unicast relay`,
+    `Mode: **unicast**`,
+    `Relay target: **${linked}**`,
+    `From focus: ${focus?.name || "GRIMOIRE"}`,
+    ``,
+    `Use native Hermes /msg **${linked}** then return:`,
+    `### Response from ${linked}`,
+    ``,
+    `---`,
+    ``,
+    body,
+    ``,
+    `---`,
+    `the scroll never forgets. the saint always remembers.`,
+  ].join("\n");
 }
 
 /**
@@ -2049,6 +3038,133 @@ export function suggestFocusFolderId(convo) {
   return null;
 }
 
+/**
+ * Auto-merge duplicate sealed focuses (same name + channel).
+ *
+ * MERGE of clones is always safe (history folds into keeper) — INCLUDING
+ * purgeProtected pairs (dual Wizard King was stuck forever because merge
+ * previously skipped all protected focuses).
+ *
+ * Still blocked elsewhere: auto-DELETE of the *last* remaining purgeProtected
+ * focus without operator confirm+force (sleep-deletion failure mode).
+ *
+ * Returns number of focuses removed after merge.
+ */
+export function mergeDuplicateSealedFocuses(state) {
+  if (!state || !Array.isArray(state.conversations)) return 0;
+  const groups = new Map();
+  for (const c of state.conversations) {
+    if (!c || isCell2CoreFocus(c) || !isVisibleFocus(c)) continue;
+    // Include purgeProtected — clone merge is not deletion of the crown
+    const key = focusIdentityKey(c.name, getSealedChannel(c));
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  let removed = 0;
+  const dropIds = new Set();
+  const canonicalScore = (id) => {
+    const s = String(id || "").toLowerCase();
+    if (
+      s === "wizard-king-hermes" ||
+      s === "grimoire-self" ||
+      s === "scroll" ||
+      s === "healer-hermes"
+    ) {
+      return 100;
+    }
+    if (s.endsWith("-hermes") || s.endsWith("-self")) return 40;
+    return 0;
+  };
+  for (const [, list] of groups) {
+    if (list.length < 2) continue;
+    // Prefer: canonical seed id → denser history → older createdAt
+    list.sort((a, b) => {
+      const cA = canonicalScore(a.id);
+      const cB = canonicalScore(b.id);
+      if (cB !== cA) return cB - cA;
+      const aScore =
+        (a.messages?.length || 0) +
+        (a.intelLog?.length || 0) * 2 +
+        (a.pulseCount || 0) * 5;
+      const bScore =
+        (b.messages?.length || 0) +
+        (b.intelLog?.length || 0) * 2 +
+        (b.pulseCount || 0) * 5;
+      if (bScore !== aScore) return bScore - aScore;
+      return (a.createdAt || 0) - (b.createdAt || 0);
+    });
+    const keeper = list[0];
+    // Any protected clone in the group → keeper stays protected
+    if (list.some((c) => isPurgeProtected(c) || shouldBePurgeProtected(c))) {
+      keeper.purgeProtected = true;
+    }
+    for (const dup of list.slice(1)) {
+      if (!dup || dup.id === keeper.id) continue;
+      // Merge messages (append unique by id)
+      keeper.messages = Array.isArray(keeper.messages) ? keeper.messages : [];
+      const seen = new Set(keeper.messages.map((m) => m?.id).filter(Boolean));
+      for (const m of dup.messages || []) {
+        if (m?.id && seen.has(m.id)) continue;
+        if (m?.id) seen.add(m.id);
+        keeper.messages.push(m);
+      }
+      // Merge intel logs
+      keeper.intelLog = Array.isArray(keeper.intelLog) ? keeper.intelLog : [];
+      for (const e of dup.intelLog || []) {
+        keeper.intelLog.push(e);
+      }
+      if ((dup.createdAt || 0) && (!keeper.createdAt || dup.createdAt < keeper.createdAt)) {
+        keeper.createdAt = dup.createdAt;
+      }
+      keeper.updatedAt = Date.now();
+      // Re-point spells
+      for (const s of state.spells || []) {
+        if (s.conversationId === dup.id) s.conversationId = keeper.id;
+      }
+      if (state.activeId === dup.id) state.activeId = keeper.id;
+      dropIds.add(dup.id);
+      removed += 1;
+    }
+  }
+  if (dropIds.size) {
+    state.conversations = state.conversations.filter((c) => !dropIds.has(c.id));
+    try {
+      console.info(
+        "[grimoire] merged duplicate sealed focuses:",
+        removed,
+        "dropped",
+        [...dropIds]
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+  return removed;
+}
+
+/**
+ * Pick a sensible active focus if missing/stale.
+ */
+export function ensureActiveFocus(state) {
+  if (!state) return null;
+  const list = state.conversations || [];
+  const visible = list.filter((c) => isVisibleFocus(c));
+  if (!visible.length) {
+    state.activeId = null;
+    return null;
+  }
+  const cur = list.find((c) => c.id === state.activeId && isVisibleFocus(c));
+  if (cur) return cur;
+  // Prefer Wizard King → SCROLL → GRIMOIRE → first
+  const prefer =
+    visible.find((c) => /wizard king/i.test(c.name || "")) ||
+    visible.find((c) => /^scroll$/i.test(c.name || "")) ||
+    visible.find((c) => /^grimoire$/i.test(c.name || "") || c.id === "grimoire-self") ||
+    visible[0];
+  state.activeId = prefer?.id || null;
+  return prefer || null;
+}
+
 export function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -2056,14 +3172,18 @@ export function loadState() {
       const parsed = JSON.parse(raw);
       if (parsed?.conversations?.length) {
         // Light migration: ensure AI nodes have alignment directive once
+        const priorActive = parsed.activeId || null;
         migrateState(parsed);
-        parsed.activeId = null;
         if (typeof parsed.spellsOpen !== "boolean") {
           parsed.spellsOpen = true;
         }
-        if (parsed.spellView !== "history" && parsed.spellView !== "library") {
+        // Library tab deprecated — only active | history
+        if (parsed.spellView === "library") parsed.spellView = "active";
+        if (parsed.spellView !== "history" && parsed.spellView !== "active") {
           parsed.spellView = "active";
         }
+        // Compact cards vs full detail list in Spells panel
+        if (parsed.spellListMode !== "detail") parsed.spellListMode = "compact";
         // Drop layout-regression flag if present
         delete parsed.sidebarCollapsed;
         // Spell face/content model migration
@@ -2072,6 +3192,23 @@ export function loadState() {
         }
         ensureScrollFocus(parsed);
         ensureCell2CoreFocus(parsed);
+        ensureGrimoireSelfFocus(parsed);
+        ensureCriticalPurgeProtection(parsed);
+        // Safe merge of dual Wizard King / sealed-channel clones (no history loss)
+        try {
+          mergeDuplicateSealedFocuses(parsed);
+        } catch {
+          /* non-fatal */
+        }
+        // Fleet Command schema migration (legacy → linkedSession / breathing / autoCast)
+        try {
+          ensureFleetCommandState(parsed);
+        } catch {
+          /* non-fatal */
+        }
+        // Restore prior active if still valid; else pick a sensible default
+        parsed.activeId = priorActive;
+        ensureActiveFocus(parsed);
         ensureRoadmapsState(parsed);
         return parsed;
       }
@@ -2088,12 +3225,16 @@ export function loadState() {
     activeId: null,
     spellsOpen: true,
     spellView: "active",
+    spellListMode: "compact",
     focusFolders: structuredClone(DEFAULT_FOCUS_FOLDERS),
     roadmaps: [],
     activeRoadmapSlug: null,
   };
   ensureScrollFocus(fresh);
   ensureCell2CoreFocus(fresh);
+  ensureGrimoireSelfFocus(fresh);
+  ensureCriticalPurgeProtection(fresh);
+  ensureFleetCommandState(fresh);
   ensureRoadmapsState(fresh);
   return fresh;
 }
@@ -2126,6 +3267,8 @@ export function ensureFocusOrgFields(convo, { assignFolder = true } = {}) {
   if (!convo.lastViewedAt) {
     convo.lastViewedAt = Number(convo.updatedAt || convo.createdAt || Date.now());
   }
+  // Fleet Command schema (linkedSession, breathing, mission, …)
+  ensureFleetFocusFields(convo);
   return convo;
 }
 
@@ -2237,13 +3380,9 @@ function migrateState(state) {
   }
 
   // Inject self-recursive GRIMOIRE Focus if missing
-  const hasGrimoireSelf = (state.conversations || []).some(
-    (c) => c.id === "grimoire-self"
-  );
-  if (!hasGrimoireSelf) {
-    const seed = SEED_CONVERSATIONS.find((c) => c.id === "grimoire-self");
-    if (seed) state.conversations.push(structuredClone(seed));
-  }
+  ensureGrimoireSelfFocus(state);
+  // Operator-critical focuses: never auto-deletable by AI
+  ensureCriticalPurgeProtection(state);
 
   if (
     state.activeId &&
@@ -2656,12 +3795,8 @@ export function saveState(state) {
         spells: state.spells,
         activeId: state.activeId,
         spellsOpen: state.spellsOpen,
-        spellView:
-          state.spellView === "history"
-            ? "history"
-            : state.spellView === "library"
-              ? "library"
-              : "active",
+        spellView: state.spellView === "history" ? "history" : "active",
+        spellListMode: state.spellListMode === "detail" ? "detail" : "compact",
         focusFolders: Array.isArray(state.focusFolders)
           ? state.focusFolders
           : structuredClone(DEFAULT_FOCUS_FOLDERS),
