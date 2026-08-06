@@ -1897,6 +1897,14 @@ function sortFocusesForDisplay(list) {
 
 window.__renderConvoList = renderConvoList;
 function renderConvoList() {
+  // One GRIMOIRE book · collapse clones before paint (survives stale localStorage)
+  try {
+    if (typeof mergeGrimoireNameClones === "function" && mergeGrimoireNameClones(state) > 0) {
+      persist();
+    }
+  } catch (e) {
+    console.warn("[sidebar] mergeGrimoireNameClones", e);
+  }
   console.debug("[sidebar] render start", {
     convoList: !!els.convoList,
     conversations: (state.conversations || []).length,
