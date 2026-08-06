@@ -1935,24 +1935,37 @@ function renderConvoList() {
 
   const pinned = matched.filter((c) => c.pinned);
   const unpinned = matched.filter((c) => !c.pinned);
-  if (pinned.length && !String(query).trim()) {
+  // When searching: show flat matched list (pin mark still on row). No dual section.
+  if (searching) {
+    const flat = sortFocusesForDisplay(matched);
+    for (const c of flat) {
+      try {
+        els.convoList.appendChild(buildFocusRow(c));
+      } catch (e) {
+        console.warn("[sidebar] row append failed", c.id, e);
+      }
+    }
+    return;
+  }
+  // Normal: pinned section once, then unpinned only (never re-list pinned)
+  if (pinned.length) {
     const pinHeader = document.createElement("div");
     pinHeader.className = "focus-group-header focus-group-pinned";
-    pinHeader.innerHTML = '<span class="focus-group-name">★ Pinned</span><span class="focus-group-count">' + pinned.length + "</span>";
+    pinHeader.innerHTML =
+      '<span class="focus-group-name">★ Pinned</span><span class="focus-group-count">' +
+      pinned.length +
+      "</span>";
     els.convoList.appendChild(pinHeader);
     for (const c of pinned) els.convoList.appendChild(buildFocusRow(c));
   }
-  const flat = sortFocusesForDisplay(unpinned.length ? unpinned : matched);
-  console.debug("[sidebar] appending rows", flat.map((c) => c.id + "::" + c.name));
+  const flat = sortFocusesForDisplay(unpinned);
   for (const c of flat) {
     try {
-      // Name-only rows — path gate lives in center workspace + 📁 cue, not under each focus
       els.convoList.appendChild(buildFocusRow(c));
     } catch (e) {
       console.warn("[sidebar] row append failed", c.id, e);
     }
   }
-  console.debug("[sidebar] render end", { rows: flat.length });
 }
 
 /**
