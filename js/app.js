@@ -12074,23 +12074,24 @@ els.btnGalleryClose?.addEventListener("click", () => {
 });
 
 function resetApp() {
-  if (!confirm("Reset Grimoire? This clears all focuses, spells, and saved state.")) return;
+  if (
+    !confirm(
+      "Reset Grimoire? Clears all focuses, spells, and browser state. Reloads clean seed (GRIMOIRE only)."
+    )
+  )
+    return;
   try {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem("grimoire-mvp-v1");
     localStorage.removeItem("grimoire-state-v1");
     localStorage.removeItem("grimoire-sidebar-collapsed-v1");
+    // drop any vault handle hints
+    for (const k of Object.keys(localStorage)) {
+      if (/^grimoire/i.test(k)) localStorage.removeItem(k);
+    }
   } catch {}
-  state.conversations = [];
-  state.spells = [];
-  state.activeId = null;
-  state.focusFolders = structuredClone(DEFAULT_FOCUS_FOLDERS);
-  state.focusSearchQuery = "";
-  if (els.focusSearch) els.focusSearch.value = "";
-  setSpellsOpen(true);
-  persist();
-  renderAll();
-  toast("App reset — fresh start", "success");
+  toast("App reset — reloading clean…", "success");
+  location.reload();
 }
 
 els.btnResetApp?.addEventListener("click", resetApp);

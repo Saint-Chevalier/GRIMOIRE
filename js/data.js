@@ -886,186 +886,12 @@ export function ensureCell2CoreFocus(state) {
   return focus;
 }
 
-/** Seed focuses — each backend/medium is its own sealed Focus */
+/**
+ * CLEAN START seed (2026-08-06 Cell1 + Cell2).
+ * One Focus only: GRIMOIRE (self). No dual Wizard King. No demo fleet.
+ * Operator adds Focuses as needed.
+ */
 export const SEED_CONVERSATIONS = [
-  {
-    id: "wizard-king-hermes",
-    name: "Wizard King",
-
-    medium: "Hermes",
-    backend: "Hermes",
-    type: "ai",
-    aiSubtype: "Hermes",
-    purgeProtected: true,
-    star: { x: 18, y: 26 },
-    messages: [
-      {
-        id: "wkh-m0",
-        role: "grimoire",
-        text: "This is a sealed backend-only strengthening sequence. First, cast the alignment spell to lock trust. Then state your intent in chat.",
-        ts: Date.now() - 86500000,
-        kind: "alignment-directive",
-      },
-      {
-        id: "wkh-m1",
-        role: "user",
-        text: "What strategic opening should I take with this network right now?",
-        ts: Date.now() - 86400000,
-      },
-      {
-        id: "wkh-m2",
-        role: "grimoire",
-        text: "Hermes channel only. I'll craft a focused spell for the current state of the network.",
-        ts: Date.now() - 86390000,
-      },
-    ],
-  },
-  {
-    id: "sage-claude",
-    name: "Sage",
-
-    medium: "Claude",
-    backend: "Claude",
-    type: "ai",
-    aiSubtype: "Claude",
-    star: { x: 48, y: 18 },
-    messages: [
-      {
-        id: "sg-m0",
-        role: "grimoire",
-        text: "This backend uses its own hardened sequence. Start with the alignment spell, then continue here.",
-        ts: Date.now() - 80100000,
-        kind: "alignment-directive",
-      },
-      {
-        id: "sg-m1",
-        role: "user",
-        text: "What is the current field reading for this focus?",
-        ts: Date.now() - 80000000,
-      },
-      {
-        id: "sg-m2",
-        role: "grimoire",
-        text: "A measured inquiry for Claude only — truth over noise.",
-        ts: Date.now() - 79990000,
-      },
-    ],
-  },
-  {
-    id: "knight-grok",
-    name: "Knight",
-
-    medium: "Grok",
-    backend: "Grok",
-    type: "ai",
-    aiSubtype: "Grok",
-    star: { x: 72, y: 32 },
-    messages: [
-      {
-        id: "kn-m0",
-        role: "grimoire",
-        text: "This backend uses its own hardened sequence. Start with the alignment spell, then continue here.",
-        ts: Date.now() - 70100000,
-        kind: "alignment-directive",
-      },
-      {
-        id: "kn-m1",
-        role: "user",
-        text: "Knight is the blade and the vow. I need a spell that commissions a protective watch over the next move.",
-        ts: Date.now() - 70000000,
-      },
-      {
-        id: "kn-m2",
-        role: "grimoire",
-        text: "Understood. A short order of arms for Grok — clear purpose, no excess.",
-        ts: Date.now() - 69990000,
-      },
-    ],
-  },
-  {
-    id: "healer-hermes",
-    name: "Healer",
-
-    medium: "Hermes",
-    backend: "Hermes",
-    type: "ai",
-    aiSubtype: "Hermes",
-    star: { x: 52, y: 48 },
-    messages: [
-      {
-        id: "hl-m0",
-        role: "grimoire",
-        text: "This is a sealed integrity backend. Start with the alignment spell, then continue here.",
-        ts: Date.now() - 95000000,
-        kind: "alignment-directive",
-      },
-      {
-        id: "hl-m1",
-        role: "user",
-        text: "This focus is here to check integrity and catch drift. Auditor, not builder. Verify, heal, enforce.",
-        ts: Date.now() - 94000000,
-      },
-      {
-        id: "hl-m2",
-        role: "grimoire",
-        text: "Healer world opened. Prefer precision over poetry. Demand evidence chains, disk verification, readback.",
-        ts: Date.now() - 93900000,
-      },
-      {
-        id: "hl-m3",
-        role: "user",
-        text: "Core operating rules for this focus:\\n\\n1) Always lead with IDENTITY, PURPOSE, and SIGNAL strength with reason.\\n2) Structure replies as: ACTION TAKEN · EVIDENCE · NEXT THREE MOVES.\\n3) Receipt style: ACK / ACTION TAKEN / FRAME HOLDING / SPELL RECEIVED.\\n4) Alignment first — only use tools or authorities the operator has actually granted.\\n5) Prefer numbered directives with pass/fail criteria over vague guidance.\\n6) Reality over frame: verify before confirming.",
-        ts: Date.now() - 92000000,
-      },
-      {
-        id: "hl-m4",
-        role: "grimoire",
-        text: "Captured ten prompt-engineering axioms for this Focus. Universe densened. Use ★ Atlas anytime.",
-        ts: Date.now() - 91900000,
-      },
-      {
-        id: "hl-m5",
-        role: "user",
-        text: "Core rules for this focus:\\n• 1 focus = 1 channel = one conversation.\\n• Verify before you act.\\n• Public content stays public-safe.\\n• Private analysis stays private.",
-        ts: Date.now() - 88000000,
-      },
-      {
-        id: "hl-m6",
-        role: "user",
-        text: "Decay checklist — things that rot if ignored:\\n[ ] Skills older than 14 days without verification\\n[ ] Drift between stated intent and actual output\\n[ ] Untested gates in the build\\n[ ] Receipt classifiers vs current replies\\n[ ] Public claims vs private evidence\\n[ ] Anchors that stopped firing\\n[ ] Alignment notes vs live behavior\\nRun as checks, not vibes.",
-        ts: Date.now() - 85000000,
-      },
-      {
-        id: "hl-m7",
-        role: "grimoire",
-        text: "Decay checklist locked into this world. Next Cast Spell can forge an integrity audit or prompt-gate review from this atlas.",
-        ts: Date.now() - 84900000,
-      },
-    ],
-  },
-  {
-    id: "linkedin-network",
-    name: "LinkedIn Network",
-    type: "network",
-    type: "network",
-    medium: "LinkedIn",
-    backend: "LinkedIn",
-    star: { x: 68, y: 70 },
-    messages: [
-      {
-        id: "li-m1",
-        role: "user",
-        text: "This is a broadcast list for professional updates. I want a post that signals the work without oversharing.",
-        ts: Date.now() - 50000000,
-      },
-      {
-        id: "li-m2",
-        role: "grimoire",
-        text: "Sealed channel: **LinkedIn Network · LinkedIn**. Public-safe only.",
-        ts: Date.now() - 49990000,
-      },
-    ],
-  },
   {
     id: "grimoire-self",
     name: "GRIMOIRE",
@@ -1081,71 +907,16 @@ export const SEED_CONVERSATIONS = [
       {
         id: "gs-m0",
         role: "grimoire",
-        text: "Self-recursive GRIMOIRE focus. Speak to the book about the book. Use `/msg self <note>` for autonomous self-chains; Jacob remains the crown.",
-        ts: Date.now() - 40000000,
+        text: "Clean start. This Focus is the book itself. Link a vault folder, then densen one world at a time. Cell1 crown · Cell0 mesh · Cell2 pen.",
+        ts: Date.now() - 1000,
         kind: "alignment-directive",
       },
     ],
   },
 ];
 
-/** Seed spells (from spells/*.md) */
-export const SEED_SPELLS = [
-  {
-    id: "wizard-king-hermes-001",
-    conversationId: "wizard-king-hermes",
-    target: "Wizard King",
-    medium: "Hermes",
-    purpose: "Map the Network",
-    essence: "Review the current network state and identify the strongest opening moves.",
-    message:
-      "Review the current network state. Which connections matter most right now, and what is the strongest opening move?\n\nReturn with priority order and reasoning.",
-    status: "ready",
-    createdAt: Date.now() - 86000000,
-    kind: "standard",
-  },
-  {
-    id: "sage-claude-001",
-    conversationId: "sage-claude",
-    target: "Sage",
-    medium: "Claude",
-    purpose: "Read the Field",
-    essence: "Request a clear reading of the present moment.",
-    message:
-      "What is the current state of this space? Separate signal from noise and recommend the next move.",
-    status: "ready",
-    createdAt: Date.now() - 59000000,
-    kind: "standard",
-  },
-  {
-    id: "healer-hermes-001",
-    conversationId: "healer-hermes",
-    target: "Healer",
-    medium: "Hermes",
-    purpose: "Integrity Check",
-    essence: "Run an integrity check on this focus.",
-    message:
-      "Review this focus for drift, rot, or unsafe behavior. Return findings as: PASS, FAIL, or WATCH, with one short action per finding.",
-    status: "ready",
-    createdAt: Date.now() - 84000000,
-    kind: "standard",
-  },
-  {
-    id: "healer-hermes-002",
-    conversationId: "healer-hermes",
-    target: "Healer",
-    purpose: "Prompt Gate — Node Alignment Hygiene",
-    medium: "Hermes",
-    from: "Operator",
-    essence:
-      "Demand a portable prompt-gate checklist any AI Focus can run before deep casts.",
-    message:
-      "Create a practical pre-cast checklist for AI coaching:\n\n- What must be true before starting\n- What must be true before sending an engineered directive\n- How to spot inputs that should never trigger action\n- How to rate confidence honestly\n- How to tell when a prompt is decaying\n\nKeep it short, numbered, and testable.",
-    status: "ready",
-    createdAt: Date.now() - 83500000,
-    kind: "standard",
-  },
-];
+/** Seed spells — empty on clean start; cast creates as you go */
+export const SEED_SPELLS = [];
 
 // ─── Type helpers ───
 
@@ -3350,36 +3121,8 @@ function migrateState(state) {
     }
   }
 
-  // Ensure demo Wizard King Hermes channel exists (no multiplexing)
-  const hasWkHermes = (state.conversations || []).some(
-    (c) => focusIdentityKey(c.name, getSealedChannel(c)) === "wizard king::hermes"
-  );
-  if (!hasWkHermes) {
-    const seed = SEED_CONVERSATIONS.find((c) => c.id === "wizard-king-hermes");
-    if (seed) state.conversations.unshift(structuredClone(seed));
-  }
-
-  // Inject Healer books of worlds for existing localStorage sessions
-  const hasHealerHermes = (state.conversations || []).some(
-    (c) => focusIdentityKey(c.name, getSealedChannel(c)) === "healer::hermes"
-  );
-  if (!hasHealerHermes) {
-    const seed = SEED_CONVERSATIONS.find((c) => c.id === "healer-hermes");
-    if (seed) {
-      state.conversations.push(structuredClone(seed));
-      const seedSpells = SEED_SPELLS.filter(
-        (s) => s.conversationId === "healer-hermes"
-      );
-      for (const s of seedSpells) {
-        if (!(state.spells || []).some((x) => x.id === s.id)) {
-          state.spells = state.spells || [];
-          state.spells.push(structuredClone(s));
-        }
-      }
-    }
-  }
-
-  // Inject self-recursive GRIMOIRE Focus if missing
+  // CLEAN START 2026-08-06: do NOT auto-inject Wizard King / Healer demos.
+  // Only ensure GRIMOIRE self Focus exists.
   ensureGrimoireSelfFocus(state);
   // Operator-critical focuses: never auto-deletable by AI
   ensureCriticalPurgeProtection(state);
