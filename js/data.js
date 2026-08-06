@@ -737,42 +737,11 @@ export function sealedChannelLabel(focus) {
 }
 
 /**
- * Seed the SCROLL eternal-intelligence Focus once if missing.
- * Call after state load (migrate or fresh seed).
+ * CLEAN START 2026-08-06: do not auto-seed SCROLL Focus.
+ * Operator adds Focuses intentionally. Prior ore lives in Cell0/Cell2 disks.
  */
 export function ensureScrollFocus(state) {
-  if (!state) return;
-  const existing = (state.conversations || []).find((c) =>
-    /^scroll$/i.test(String(c.name || c.id || ""))
-  );
-  if (existing) {
-    existing.purgeProtected = true;
-    existing.name = existing.name || "SCROLL";
-    existing.type = "eternal-intelligence";
-    existing.channel = existing.channel || existing.medium || "Hermes";
-    existing.medium = existing.medium || existing.channel || "Hermes";
-    existing.backend = existing.backend || existing.medium || "Hermes";
-    return existing;
-  }
-  const focus = {
-    id: "scroll",
-    name: "SCROLL",
-    type: "eternal-intelligence",
-    channel: "Hermes",
-    medium: "Hermes",
-    backend: "Hermes",
-    aiSubtype: "Hermes",
-    purgeProtected: true,
-    status: "active",
-    derivedNodes: [],
-    messages: [],
-    alignmentProfile: { directives: [] },
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  state.conversations = [focus, ...(state.conversations || [])];
-  state.activeId = focus.id;
-  return focus;
+  return null;
 }
 
 /**
