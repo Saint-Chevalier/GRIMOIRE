@@ -7115,7 +7115,7 @@ function openNewFocusModal({ name, type, model } = {}) {
         "Place: anchor a location and its intelligence. Speak about this site, its history, and its secrets.",
       thing:
         "Thing: object, system, artifact, or tool. Track its behavior, upgrades, and role in your world.",
-      ai: "AI: densen this node and craft curated words-as-magic. Model is optional — Hermes, Grok, Claude, Custom, or open.",
+      ai: "AI: densen this node + craft words-as-magic. Pick the substrate it talks through — or Custom if this Focus is its own OS (e.g. GRIMOIRE = the book itself, built by you, not “chat with Grok”). DASKW: writing during talk feeds spells, brain, and UI.",
       idea: "Idea: concept, philosophy, or framework. Build it into doctrine, spawn spells, and test it against reality.",
     };
     newFocusHint.textContent = hints[newType?.value || t] || hints.person;
@@ -7177,10 +7177,20 @@ function syncNewFocusFormChrome() {
       person: "Person: densen who they are and craft message-spells for real life. Medium is open — Discord, text, in-person, anything.",
       place: "Place: anchor a location and its intelligence. Speak about this site, its history, and its secrets.",
       thing: "Thing: object, system, artifact, or tool. Track its behavior, upgrades, and role in your world.",
-      ai: "AI: densen this node and craft curated words-as-magic. Model is optional — Hermes, Grok, Claude, Custom, or open.",
+      ai: "AI: densen this node + craft words-as-magic. Pick the substrate it talks through — or Custom if this Focus is its own OS (e.g. GRIMOIRE = the book itself, built by you, not “chat with Grok”). DASKW: writing during talk feeds spells, brain, and UI.",
       idea: "Idea: concept, philosophy, or framework. Build it into doctrine, spawn spells, and test it against reality.",
     };
     els.newFocusHint.textContent = hints[typeVal] || hints.person;
+  }
+  // GRIMOIRE / book self → Custom OS by default (not vendor Grok chat)
+  if (isAi && els.newModel && els.newName) {
+    const n = String(els.newName.value || "").trim().toLowerCase();
+    if (
+      (n === "grimoire" || n === "the grimoire" || n.includes("grimoire app")) &&
+      (els.newModel.value === "none" || els.newModel.value === "Grok")
+    ) {
+      els.newModel.value = "Custom";
+    }
   }
 }
 
