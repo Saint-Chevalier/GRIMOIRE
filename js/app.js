@@ -72,6 +72,8 @@ import {
   ensureGrimoireSelfFocus,
   ensureActiveFocus,
   mergeDuplicateSealedFocuses,
+  mergeGrimoireNameClones,
+  scrubStaleVaultLockMessages,
   isPurgeProtected,
   isJacobLinkedFocus,
   shouldBePurgeProtected,
@@ -2110,6 +2112,8 @@ async function onChooseFocusPath(focus) {
     // Unlock even if later UI refresh fails
     setVaultFailState(false);
     markFocusVaultLinked(focus.id);
+    scrubStaleVaultLockMessages(focus);
+    mergeGrimoireNameClones(state);
     persist();
     toast(`Vault ready: ${handle.name}/ · focus unlocked`, "success");
     activityPing(`✦ Focus vault: ${handle.name}/`);
@@ -2754,6 +2758,7 @@ function renderChat() {
   }
 
   const locked = isFocusLocked(convo);
+  if (!locked) scrubStaleVaultLockMessages(convo);
   setChatControlsEnabled(!locked);
   updatePathGateUi(convo);
   if (locked) {
@@ -10257,6 +10262,28 @@ function createConversation({ name, type, model } = {}) {
 
     // Dedupe only against visible focuses (system/hidden never block user names)
     const visible = (state.conversations || []).filter((c) => isVisibleFocus(c));
+    // GRIMOIRE is one book — any existing GRIMOIRE absorbs create
+    if (cleanName.toLowerCase() === "grimoire") {
+      const existingG = visible.find(
+        (c) => String(c.name || "").trim().toLowerCase() === "grimoire"
+      );
+      if (existingG) {
+        if (t === "ai" && sealed && sealed !== "Open") {
+          existingG.medium = sealed;
+          existingG.backend = sealed;
+          existingG.model = sealed;
+          existingG.aiSubtype = sealed;
+        }
+        existingG.purgeProtected = true;
+        existingG.selfRecursive = true;
+        state.activeId = existingG.id;
+        mergeGrimoireNameClones(state);
+        persist();
+        renderAll();
+        toast("GRIMOIRE already exists — opened the one book", "success");
+        return existingG;
+      }
+    }
     if (focusExists(visible, cleanName, sealed)) {
       toast(`Focus already exists: ${cleanName} · ${sealed}`);
       const existing = visible.find(

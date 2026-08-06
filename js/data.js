@@ -2879,7 +2879,100 @@ export function mergeDuplicateSealedFocuses(state) {
       /* ignore */
     }
   }
+  // Always collapse multiple GRIMOIRE-named focuses (seed Local + user Custom, etc.)
+  removed += mergeGrimoireNameClones(state);
   return removed;
+}
+
+/**
+ * One book · one Focus. Collapse every visible focus named GRIMOIRE into one keeper.
+ * Prefer denser history / vault-linked / Custom OS over empty seed.
+ */
+export function mergeGrimoireNameClones(state) {
+  if (!state || !Array.isArray(state.conversations)) return 0;
+  const list = state.conversations.filter(
+    (c) =>
+      c &&
+      isVisibleFocus(c) &&
+      String(c.name || "").trim().toLowerCase() === "grimoire"
+  );
+  if (list.length < 2) return 0;
+  list.sort((a, b) => {
+    const score = (c) =>
+      (c.messages?.length || 0) +
+      (c.intelLog?.length || 0) * 2 +
+      (c.vaultLinked ? 50 : 0) +
+      (String(getSealedChannel(c)).toLowerCase() === "custom" ? 20 : 0) +
+      (c.pinned ? 5 : 0) +
+      (c.id === "grimoire-self" ? 10 : 0);
+    return score(b) - score(a);
+  });
+  const keeper = list[0];
+  keeper.name = "GRIMOIRE";
+  keeper.purgeProtected = true;
+  keeper.selfRecursive = true;
+  // Prefer Custom OS label if any clone had it
+  if (
+    list.some((c) => /custom/i.test(getSealedChannel(c))) &&
+    !/custom/i.test(getSealedChannel(keeper))
+  ) {
+    keeper.medium = "Custom";
+    keeper.backend = "Custom";
+    keeper.model = "Custom";
+    keeper.aiSubtype = "Custom";
+  }
+  let removed = 0;
+  const dropIds = new Set();
+  for (const dup of list.slice(1)) {
+    keeper.messages = Array.isArray(keeper.messages) ? keeper.messages : [];
+    const seen = new Set(keeper.messages.map((m) => m?.id).filter(Boolean));
+    for (const m of dup.messages || []) {
+      if (m?.id && seen.has(m.id)) continue;
+      if (m?.id) seen.add(m.id);
+      keeper.messages.push(m);
+    }
+    keeper.intelLog = Array.isArray(keeper.intelLog) ? keeper.intelLog : [];
+    for (const e of dup.intelLog || []) keeper.intelLog.push(e);
+    if (dup.pinned) keeper.pinned = true;
+    if (dup.vaultLinked) keeper.vaultLinked = true;
+    if (dup.vaultFolderName) keeper.vaultFolderName = dup.vaultFolderName;
+    for (const s of state.spells || []) {
+      if (s.conversationId === dup.id) s.conversationId = keeper.id;
+    }
+    if (state.activeId === dup.id) state.activeId = keeper.id;
+    dropIds.add(dup.id);
+    removed += 1;
+  }
+  if (dropIds.size) {
+    state.conversations = state.conversations.filter((c) => !dropIds.has(c.id));
+    scrubStaleVaultLockMessages(keeper);
+    try {
+      console.info("[grimoire] merged GRIMOIRE name clones:", removed, [...dropIds]);
+    } catch {
+      /* ignore */
+    }
+  }
+  return removed;
+}
+
+/** Remove obsolete "Locked until Create my path" chat spam once vault is linked. */
+export function scrubStaleVaultLockMessages(convo) {
+  if (!convo || !Array.isArray(convo.messages)) return 0;
+  const before = convo.messages.length;
+  convo.messages = convo.messages.filter((m) => {
+    const t = String(m?.text || "");
+    if (!t) return true;
+    // Drop system lock announcements (not user densen content)
+    if (
+      m.role === "grimoire" &&
+      /\*\*Locked\*\*|Create my path|chat.*Cast Spell.*disabled until/i.test(t) &&
+      t.length < 600
+    ) {
+      return false;
+    }
+    return true;
+  });
+  return before - convo.messages.length;
 }
 
 /**
