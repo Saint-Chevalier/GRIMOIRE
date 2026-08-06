@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # false: rapid pushes were cancelling deploys mid-flight → mixed CDN + "module did not load"
+  cancel-in-progress: false
 
 jobs:
   deploy:
