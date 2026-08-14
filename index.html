@@ -1040,11 +1040,56 @@ r
 
       document.addEventListener("click", function (e) {
         const btn = e.target.closest("#btn-toggle-experiences");
+        if (btn) {
+          const panel = document.getElementById("experiences-panel");
+          const spellsPanel = document.getElementById("spells-panel");
+          if (panel) {
+            const hidden = panel.hasAttribute("hidden");
+            if (hidden) {
+              panel.removeAttribute("hidden");
+              if (spellsPanel) spellsPanel.setAttribute("hidden", "");
+              renderExperiencesList();
+            } else {
+              panel.setAttribute("hidden", "");
+            }
+          }
+        }
         if (btn) openExperienceOverlay();
       });
 
       window.__openExperienceOverlay = openExperienceOverlay;
       window.__closeExperienceOverlay = closeExperienceOverlay;
+
+      async function renderExperiencesList() {
+        const list = document.getElementById("experiences-list");
+        if (!list) return;
+        list.innerHTML = '<div class="experience-empty">Loading…</div>';
+        try {
+          const intelMod = await import("./js/intelligence.js?v=experience-layer-1");
+          const items = await intelMod.readExperiencesFromVault();
+          if (!items.length) {
+            list.innerHTML = '<div class="experience-empty">No experiences captured yet.</div>';
+            return;
+          }
+          list.innerHTML = "";
+          for (const exp of items.slice(0, 50)) {
+            const el = document.createElement("div");
+            el.className = "experience-item";
+            const tags = (exp.tags || []).map(t => `<span class="experience-tag">${t}</span>`).join("");
+            const date = exp.date_range?.start || exp.created_at || "";
+            el.innerHTML = `
+              <div class="experience-item-title">${exp.title || "Untitled"}</div>
+              <div class="experience-item-meta">${date ? new Date(date).toLocaleString() : ""} · ${exp.certainty || "unknown"}</div>
+              <div class="experience-item-body">${exp.summary || exp.what_happened || ""}</div>
+              <div class="experience-item-tags">${tags}</div>
+            `;
+            list.appendChild(el);
+          }
+        } catch (err) {
+          list.innerHTML = '<div class="experience-empty">Failed to load experiences.</div>';
+          console.warn("[ExperienceAudit] load failed", err);
+        }
+      }
     })();
   </script>
 

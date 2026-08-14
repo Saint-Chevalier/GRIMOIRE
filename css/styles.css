@@ -6206,3 +6206,53 @@ button.session0-send.is-fleet-node {
   margin-top: 0.4rem;
   min-height: 1.1rem;
 }
+
+/* Experience audit panel */
+.experiences-list {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 8px;
+}
+.experience-item {
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: rgba(255,255,255,0.02);
+}
+.experience-item-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+  color: #e2e8f0;
+}
+.experience-item-meta {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+}
+.experience-item-body {
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.4;
+}
+.experience-item-tags {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.experience-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+.experience-empty {
+  text-align: center;
+  padding: 24px;
+  color: #64748b;
+  font-size: 13px;
+}
