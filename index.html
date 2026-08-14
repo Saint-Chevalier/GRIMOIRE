@@ -267,6 +267,7 @@
       </header>
       <div class="intel-audit-toolbar" id="intel-audit-toolbar">
         <button type="button" class="intel-audit-tab active" data-tab="overview" id="tab-audit-overview">Overview</button>
+        <button type="button" class="intel-audit-tab" data-tab="entities" id="tab-audit-entities">Entities</button>
         <button type="button" class="intel-audit-tab" data-tab="experiences" id="tab-audit-experiences">Experiences</button>
         <button type="button" class="intel-audit-tab" data-tab="focuses" id="tab-audit-focuses">Focuses</button>
         <button type="button" class="intel-audit-tab" data-tab="scroll" id="tab-audit-scroll">Scroll Nodes</button>
@@ -275,6 +276,9 @@
       <div class="intel-audit-content" id="intel-audit-content">
         <div class="intel-audit-tab-panel active" data-panel="overview" id="panel-audit-overview">
           <div class="intel-audit-empty">Loading vault overview…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="entities" id="panel-audit-entities" hidden>
+          <div class="intel-audit-empty">Loading entities…</div>
         </div>
         <div class="intel-audit-tab-panel" data-panel="experiences" id="panel-audit-experiences" hidden>
           <div class="intel-audit-empty">Loading experiences…</div>
@@ -1088,6 +1092,7 @@ r
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.focuses.length}</span><span class="intel-audit-metric-label">Focuses</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.experiences.length}</span><span class="intel-audit-metric-label">Experiences</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.scrollNodes.length}</span><span class="intel-audit-metric-label">Scroll Nodes</span></div>
+                  <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.entities?.length || 0}</span><span class="intel-audit-metric-label">Entities</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.busActivity.length}</span><span class="intel-audit-metric-label">Bus Events</span></div>
                 </div>
                 <div class="intel-audit-meta">Generated: ${new Date(audit.generatedAt).toLocaleString()}</div>
@@ -1137,6 +1142,24 @@ r
                 <div class="experience-item">
                   <div class="experience-item-title">${node.name || node.id || "Unnamed"}</div>
                   <div class="experience-item-meta">${node.type || "node"} · ${node.focus || ""}</div>
+                </div>
+              `).join("");
+            }
+          }
+
+          // Entities tab
+          const entityList = document.getElementById("panel-audit-entities");
+          if (entityList) {
+            const entities = await intelMod.readAllEntitiesFromVault();
+            if (!entities.length) {
+              entityList.innerHTML = '<div class="intel-audit-empty">No entities captured yet.</div>';
+            } else {
+              entityList.innerHTML = entities.slice(0, 20).map(ent => `
+                <div class="experience-item">
+                  <div class="experience-item-title">${ent.name || "Untitled"} <span class="experience-tag">${ent.type || "item"}</span></div>
+                  <div class="experience-item-meta">${ent.certainty || "unknown"} · ${ent.status || "active"}</div>
+                  <div class="experience-item-body">${Object.entries(ent.facts || {}).flatMap(([domain, facts]) => Object.entries(facts || {}).slice(0, 3).map(([k, v]) => `${domain} · ${k}: ${v}`)).join("<br/>") || "No facts captured"}</div>
+                  <div class="experience-item-tags">${(ent.tags || []).map(t => `<span class="experience-tag">${t}</span>`).join("")}</div>
                 </div>
               `).join("");
             }

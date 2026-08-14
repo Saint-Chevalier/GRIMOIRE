@@ -4005,6 +4005,7 @@ export async function auditVaultIntelligence(opts = {}) {
     ok: true,
     vault: handle.name || "GRIMOIRE-FocusIntelligence",
     focuses: [],
+    entities: [],
     experiences: [],
     scrollNodes: [],
     busActivity: [],
@@ -4014,7 +4015,7 @@ export async function auditVaultIntelligence(opts = {}) {
   try {
     // 1. Read top-level entities (focuses)
     for await (const [name, entry] of handle.entries()) {
-      if (name === "experiences" || name === "README.md" || name.startsWith(".")) continue;
+      if (name === "experiences" || name === "entities" || name === "README.md" || name.startsWith(".")) continue;
       if (entry.kind === "directory") {
         result.focuses.push({
           id: name,
@@ -4024,13 +4025,16 @@ export async function auditVaultIntelligence(opts = {}) {
       }
     }
 
-    // 2. Read experiences
+    // 2. Read entities
+    result.entities = await readAllEntitiesFromVault();
+
+    // 3. Read experiences
     result.experiences = await readExperiencesFromVault();
 
-    // 3. Read bus activity from memory
+    // 4. Read bus activity from memory
     result.busActivity = getBusActivityLog().slice(-20);
 
-    // 4. Build scroll nodes from conversations
+    // 5. Build scroll nodes from conversations
     result.scrollNodes = buildScrollNodesFromConversations();
   } catch (err) {
     result.error = String(err);
@@ -4086,4 +4090,242 @@ export async function vaultHealthCheck() {
     folderCount,
     lastWrite: lastWrite,
   };
+}
+
+/** Entity vault folder */
+export const ENTITIES_DIR = "entities";
+
+/** Vault path for an entity file */
+export function entityVaultPath(entityId) {
+  const id = sanitizeEntityId(entityId);
+  return `${ENTITIES_DIR}/${id}.md`;
+}
+
+/**
+ * Write an entity to vault.
+ * Returns { ok, method, path } or { ok: false, error }.
+ */
+export async function writeEntityToVault(entity) {
+  const e = normalizeEntity?.(entity) || entity;
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) {
+    return { ok: false, error: "no vault linked" };
+  }
+
+  const path = entityVaultPath(e.id);
+  const parts = path.split("/");
+  let dir = handle;
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i], { create: true });
+  }
+
+  try {
+    const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+    const w = await fh.createWritable();
+    const md = typeof buildEntityMarkdown === "function" ? buildEntityMarkdown(e) : String(e);
+    await w.write(md);
+    await w.close();
+    return { ok: true, method: "file-system", path };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
+/**
+ * Read all entity files from vault.
+ */
+export async function readAllEntitiesFromVault() {
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) return [];
+
+  const entries = [];
+  try {
+    const dir = await handle.getDirectoryHandle(ENTITIES_DIR, { create: false });
+    for await (const [name, fileHandle] of dir.entries()) {
+      if (!/\.md$/i.test(name)) continue;
+      try {
+        const text = await readExistingFocusText(fileHandle);
+        const ent = parseEntityMarkdown(text);
+        if (ent && ent.id) entries.push(ent);
+      } catch {
+        /* skip unreadable */
+      }
+    }
+  } catch {
+    /* no entities folder yet */
+  }
+
+  return entries.sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
+}
+
+/**
+ * Search entities by query string across name, aliases, tags, facts.
+ */
+export function searchEntities(entities, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return entities || [];
+  return (entities || []).filter((ent) => {
+    const hay = [
+      ent.name,
+      ...(ent.aliases || []),
+      ...(ent.tags || []),
+      ...Object.values(ent.facts || {}).flatMap((d) => Object.values(d || {})),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+/**
+ * Heuristic entity capture: detect entity mentions in text and write to vault.
+ * Looks for patterns like "my X", "the Y", "color:", "paid $", "price:", etc.
+ */
+const ENTITY_MENTION_PATTERNS = [
+  /\b(my|the|a|an)\s+([A-Z][A-Za-z0-9_\s]+?)(?:\s+(?:is|was|costs?|paid|bought|color|colour|size|model|serial|sn|mac|ip|url|link|location|address|price|worth|value|\$|€|£|usd|cad|aud|gbp|eur))\b/i,
+  /\b(color|colour)[:\s]+([A-Za-z]+)/i,
+  /\b(paid|cost|price|worth|value)[:\s]+[\$€£]?\s*([\d,]+(?:\.\d+)?)/i,
+  /\b(size|model|serial|sn|mac|ip)[:\s]+([A-Za-z0-9_\-\/\.]+)/i,
+  /\b(bought|purchased|acquired|ordered|delivered)\s+(?:on\s+)?([A-Za-z0-9_\s]+?)(?:\s+for\s+[\$€£]?\s*([\d,]+(?:\.\d+)?)?)/i,
+];
+
+/**
+ * Capture entities from natural conversation text.
+ * Returns array of detected entity candidates.
+ */
+export function detectEntitiesFromText(text, focusId = "", focusName = "") {
+  const entities = [];
+  const seen = new Set();
+  const push = (ent) => {
+    const key = `${ent.name || ent.id}-${ent.type || "item"}`;
+    if (!seen.has(key) && ent.name) {
+      seen.add(key);
+      entities.push(ent);
+    }
+  };
+
+  for (const pattern of ENTITY_MENTION_PATTERNS) {
+    let m;
+    while ((m = pattern.exec(text)) !== null) {
+      const raw = m[2]?.trim();
+      if (!raw || raw.length < 2 || raw.length > 80) continue;
+      const name = raw.replace(/\s+/g, " ").trim();
+      const type = guessEntityType(name, text.slice(Math.max(0, m.index - 40), m.index + 40));
+      const facts = extractFactsFromMatch(m, text);
+      push({
+        id: `ent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        type,
+        name,
+        facts,
+        source: "auto-capture",
+        tags: [type, "auto-detected"],
+      });
+    }
+  }
+
+  return entities.slice(0, 5);
+}
+
+/**
+ * Capture entities from text and write to vault.
+ * Silent background operation.
+ */
+export async function autoCaptureEntitiesFromText(text, opts = {}) {
+  const focusId = opts.focusId || "";
+  const focusName = opts.focusName || "";
+  const candidates = detectEntitiesFromText(text, focusId, focusName);
+  if (!candidates.length) return { captured: 0, entities: [] };
+
+  const captured = [];
+  for (const ent of candidates) {
+    const result = await writeEntityToVault({
+      ...ent,
+      related_focuses: focusId ? [focusId] : [],
+      certainty: "inferred",
+    });
+    if (result?.ok) captured.push({ ...ent, vaultPath: result.path });
+  }
+  return { captured: captured.length, entities: captured };
+}
+
+function guessEntityType(name, context = "") {
+  const ctx = `${name} ${context}`.toLowerCase();
+  if (/\b(person|people|guy|girl|man|woman|someone|operator|user|client|customer|friend|colleague|boss|ceo|founder|dev|engineer|designer|artist|writer|coach|mentor)\b/.test(ctx)) return "person";
+  if (/\b(place|office|home|house|apartment|room|building|store|shop|cafe|restaurant|hotel|airport|city|country|server|rack|datacenter|cloud|aws|gcp|azure|discord|channel|server|room|meeting)\b/.test(ctx)) return "place";
+  if (/\b(ai|model|gpt|claude|gemini|llama|mistral|groq|openai|anthropic|google|nous|xai|huggingface|bot|assistant|agent|node|scroll|valhalla|grimoire|cell)\b/.test(ctx)) return "ai_node";
+  if (/\b(meeting|call|event|conference|workshop|session|launch|release|party|gathering|demo|presentation|interview|review|retro|planning|sync|standup)\b/.test(ctx)) return "event";
+  return "item";
+}
+
+function extractFactsFromMatch(m, fullText) {
+  const facts = { identity: {}, physical: {}, ownership: {}, operational: {}, dynamic: {} };
+  const ctx = fullText.toLowerCase();
+  
+  // Price/cost
+  const priceMatch = fullText.match(/\$?\s*([\d,]+(?:\.\d+)?)/);
+  if (priceMatch) facts.ownership.paid = `$${priceMatch[1].replace(/,/g, "")}`;
+  
+  // Color
+  const colorMatch = fullText.match(/\b(color|colour)[:\s]+([a-z]+)/i);
+  if (colorMatch) facts.physical.color = colorMatch[2].toLowerCase();
+  
+  // Size/model
+  const sizeMatch = fullText.match(/\b(size|model)[:\s]+([A-Za-z0-9_\-\/\.]+)/i);
+  if (sizeMatch) facts.physical.size = sizeMatch[2];
+  
+  // Location
+  const locMatch = fullText.match(/\b(in|at|from|to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
+  if (locMatch) facts.identity.location = locMatch[2].slice(0, 40);
+  
+  // Date
+  const dateMatch = fullText.match(/\b(on|since|from|until)\s+((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/i);
+  if (dateMatch) facts.dynamic.last_seen = dateMatch[2];
+  
+  return facts;
+}
+
+/**
+ * Capture node intel from text mentioning other AI nodes.
+ */
+export function detectNodeIntelFromText(text) {
+  const nodes = [];
+  const known = ["grok", "claude", "chatgpt", "gpt", "gemini", "llama", "mistral", "copilot", "perplexity", "deepseek", "qwen", "step", "hermes", "discord", "telegram", "slack"];
+  const lower = text.toLowerCase();
+  for (const name of known) {
+    if (lower.includes(name)) {
+      nodes.push({
+        id: `node-${name}`,
+        name: name.charAt(0).toUpperCase() + name.slice(1),
+        type: "ai_node",
+        backend: name,
+        certainty: "inferred",
+        source: "auto-capture",
+        tags: ["ai-node", "auto-detected"],
+        facts: {
+          identity: { backend: name },
+          operational: { detected_from: "conversation" },
+        },
+      });
+    }
+  }
+  return nodes.slice(0, 3);
+}
+
+/**
+ * Capture node intel from text and write to vault.
+ */
+export async function autoCaptureNodeIntelFromText(text, opts = {}) {
+  const focusId = opts.focusId || "";
+  const candidates = detectNodeIntelFromText(text);
+  if (!candidates.length) return { captured: 0, nodes: [] };
+
+  const captured = [];
+  for (const node of candidates) {
+    const result = await writeEntityToVault({
+      ...node,
+      related_focuses: focusId ? [focusId] : [],
+    });
+    if (result?.ok) captured.push({ ...node, vaultPath: result.path });
+  }
+  return { captured: captured.length, nodes: captured };
 }

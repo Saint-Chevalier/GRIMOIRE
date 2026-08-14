@@ -210,6 +210,8 @@ import {
   buildScrollNodesFromConversations,
   autoCaptureExperienceFromText,
   detectExperienceFromText,
+  autoCaptureEntitiesFromText,
+  autoCaptureNodeIntelFromText,
 } from "./intelligence.js?v=focus-hygiene-2";
 import {
   computeFocusHealth,
@@ -6471,6 +6473,15 @@ function sendMessage(text) {
   });
   // Auto-capture experience intelligence from user turn
   void autoCaptureExperienceFromText(userText, {
+    focusId: convo.id,
+    focusName: convo.name,
+  });
+  // Auto-capture entity + node intel from user turn
+  void autoCaptureEntitiesFromText(userText, {
+    focusId: convo.id,
+    focusName: convo.name,
+  });
+  void autoCaptureNodeIntelFromText(userText, {
     focusId: convo.id,
     focusName: convo.name,
   });

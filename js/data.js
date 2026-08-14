@@ -409,6 +409,27 @@ export const INTEL_CATEGORIES = Object.freeze([
   "grievance",
   "preference",
   "relationship",
+  "entity_fact",
+  "entity_static",
+  "entity_dynamic",
+]);
+
+/** Entity types for structured entity intelligence */
+export const ENTITY_TYPES = Object.freeze([
+  "person",
+  "place",
+  "item",
+  "ai_node",
+  "event",
+]);
+
+/** Entity fact domains (the 5-YAML) */
+export const ENTITY_FACT_DOMAINS = Object.freeze([
+  "identity",
+  "physical",
+  "ownership",
+  "operational",
+  "dynamic",
 ]);
 
 /** Experience intelligence certainty levels */
@@ -5830,3 +5851,173 @@ export function evalSourceMatch(source, pattern, flags = "") {
 
 export const ALIGNMENT_DIRECTIVE_TEXT =
   "Before I can craft precise spells, we need transparency. Hit **Cast Spell** and I will generate an Alignment Reveal transmission — send it to this node first so we know exactly what we're working with.";
+
+// ============================================================
+// ENTITY INTELLIGENCE — Person / Place / Item / AI Node / Event
+// ============================================================
+
+/**
+ * Create an empty entity with the 5-YAML fact domains.
+ */
+export function createEmptyEntity(overrides = {}) {
+  const now = new Date().toISOString();
+  const id = overrides.id || `ent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  return {
+    id,
+    type: ENTITY_TYPES.includes(overrides.type) ? overrides.type : "item",
+    name: String(overrides.name || "").trim() || "Unnamed entity",
+    aliases: Array.isArray(overrides.aliases) ? overrides.aliases.filter((a) => typeof a === "string") : [],
+    certainty: CERTAINTY_LEVELS.includes(overrides.certainty) ? overrides.certainty : "unknown",
+    status: String(overrides.status || "active").trim(),
+    facts: {
+      identity: overrides.facts?.identity || {},
+      physical: overrides.facts?.physical || {},
+      ownership: overrides.facts?.ownership || {},
+      operational: overrides.facts?.operational || {},
+      dynamic: overrides.facts?.dynamic || {},
+    },
+    related_entities: Array.isArray(overrides.related_entities) ? overrides.related_entities.filter((e) => typeof e === "string") : [],
+    related_focuses: Array.isArray(overrides.related_focuses) ? overrides.related_focuses.filter((e) => typeof e === "string") : [],
+    tags: Array.isArray(overrides.tags) ? overrides.tags.filter((t) => typeof t === "string") : [],
+    source: String(overrides.source || "user").trim() || "user",
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+/**
+ * Normalize partial entity objects.
+ */
+export function normalizeEntity(ent) {
+  if (!ent || typeof ent !== "object") return createEmptyEntity();
+  const base = createEmptyEntity(ent);
+  base.id = String(ent.id || base.id).trim() || base.id;
+  if (!base.name && ent.name) base.name = String(ent.name).trim();
+  if (ent.aliases && Array.isArray(ent.aliases)) base.aliases = ent.aliases.filter((a) => typeof a === "string");
+  if (ENTITY_TYPES.includes(ent.type)) base.type = ent.type;
+  if (CERTAINTY_LEVELS.includes(ent.certainty)) base.certainty = ent.certainty;
+  base.status = String(ent.status || base.status).trim();
+  const domains = ["identity", "physical", "ownership", "operational", "dynamic"];
+  for (const d of domains) {
+    if (ent.facts && typeof ent.facts[d] === "object" && !Array.isArray(ent.facts[d])) {
+      base.facts[d] = { ...base.facts[d], ...ent.facts[d] };
+    }
+  }
+  if (ent.related_entities && Array.isArray(ent.related_entities)) base.related_entities = ent.related_entities.filter((e) => typeof e === "string");
+  if (ent.related_focuses && Array.isArray(ent.related_focuses)) base.related_focuses = ent.related_focuses.filter((e) => typeof e === "string");
+  if (ent.tags && Array.isArray(ent.tags)) base.tags = ent.tags.filter((t) => typeof t === "string");
+  base.updated_at = new Date().toISOString();
+  return base;
+}
+
+/**
+ * Build markdown for an entity with YAML frontmatter + fact sections.
+ */
+export function buildEntityMarkdown(ent) {
+  const e = normalizeEntity(ent);
+  const q = (v) => `"${String(v).replace(/"/g, '\\"')}"`;
+  const jTags = (arr) => `[${(arr || []).map((t) => q(t)).join(", ")}]`;
+  const factSection = (title, facts) => {
+    const lines = [`### ${title}`, ""];
+    for (const [k, v] of Object.entries(facts || {})) {
+      if (v === undefined || v === null || v === "") continue;
+      lines.push(`- **${k}:** ${v}`);
+    }
+    if (lines.length === 2) lines.push("_none captured_");
+    lines.push("");
+    return lines.join("\n");
+  };
+  const front = [
+    "---",
+    `id: ${q(e.id)}`,
+    `type: ${q(e.type)}`,
+    `name: ${q(e.name)}`,
+    `aliases: ${jTags(e.aliases)}`,
+    `certainty: ${q(e.certainty)}`,
+    `status: ${q(e.status)}`,
+    `source: ${q(e.source)}`,
+    `created_at: ${q(e.created_at)}`,
+    `updated_at: ${q(e.updated_at)}`,
+    `tags: ${jTags(e.tags)}`,
+    `related_entities: ${jTags(e.related_entities)}`,
+    `related_focuses: ${jTags(e.related_focuses)}`,
+    "---",
+    "",
+    `## ${e.name || "Entity"}`,
+    "",
+    factSection("Identity Facts", e.facts.identity),
+    factSection("Physical Facts", e.facts.physical),
+    factSection("Ownership Facts", e.facts.ownership),
+    factSection("Operational Facts", e.facts.operational),
+    factSection("Dynamic Facts", e.facts.dynamic),
+    "_Entity Intelligence · DASKW on disk._",
+    "",
+  ]
+    .filter((line, idx, arr) => !(line === "" && (idx === 0 || arr[idx - 1] === "")))
+    .join("\n");
+  return front;
+}
+
+/**
+ * Parse an entity from markdown.
+ */
+export function parseEntityMarkdown(text) {
+  try {
+    const raw = String(text || "");
+    const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
+    const fm = fmMatch ? fmMatch[1] : "";
+    const body = fmMatch ? raw.slice(fmMatch[0].length).trim() : raw.trim();
+
+    const fmObj = {};
+    for (const line of fm.split("\n")) {
+      const m = line.match(/^([^:]+):\s*(.*)$/);
+      if (!m) continue;
+      const key = m[1].trim();
+      let value = m[2].trim();
+      if (value.startsWith("[") && value.endsWith("]")) {
+        try {
+          value = JSON.parse(value);
+        } catch {
+          value = value.slice(1, -1).split(",").map((s) => s.trim()).filter(Boolean);
+        }
+      } else if (value.startsWith('"') && value.endsWith('"')) {
+        value = value.slice(1, -1);
+      }
+      fmObj[key] = value;
+    }
+
+    const factSection = (heading) => {
+      const re = new RegExp(`### ${heading}\n([\s\S]*?)(?=\n### |\n_Entity |$)`);
+      const m = body.match(re);
+      if (!m) return {};
+      const facts = {};
+      for (const line of m[1].split("\n")) {
+        const bullet = line.match(/^\s*-\s*\*\*(.+?)\*\*:\s*(.+)$/);
+        if (bullet) facts[bullet[1].trim()] = bullet[2].trim();
+      }
+      return facts;
+    };
+
+    return normalizeEntity({
+      id: fmObj.id,
+      type: fmObj.type,
+      name: fmObj.name,
+      aliases: fmObj.aliases,
+      certainty: fmObj.certainty,
+      status: fmObj.status,
+      source: fmObj.source,
+      tags: fmObj.tags,
+      related_entities: fmObj.related_entities,
+      related_focuses: fmObj.related_focuses,
+      facts: {
+        identity: factSection("Identity Facts"),
+        physical: factSection("Physical Facts"),
+        ownership: factSection("Ownership Facts"),
+        operational: factSection("Operational Facts"),
+        dynamic: factSection("Dynamic Facts"),
+      },
+    });
+  } catch {
+    return createEmptyEntity();
+  }
+}
