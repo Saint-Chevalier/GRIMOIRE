@@ -3979,8 +3979,14 @@ export async function autoCaptureExperienceFromText(text, opts = {}) {
   if (!exp) return null;
   try {
     const result = await writeExperienceToVault(exp);
-    return result && result.ok ? exp : null;
-  } catch {
+    if (result && result.ok) {
+      console.info("[ExperienceCapture] wrote", result.method, exp.id);
+      return exp;
+    }
+    console.warn("[ExperienceCapture] write not ok", result);
+    return null;
+  } catch (err) {
+    console.warn("[ExperienceCapture] error", err);
     return null;
   }
 }
