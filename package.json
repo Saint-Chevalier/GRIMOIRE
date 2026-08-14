@@ -1,0 +1,24 @@
+{
+  "name": "GRIMOIRE",
+  "version": "1.0.0",
+  "description": "**Local-first focus intelligence + spellcrafting for humans who route AIs.**",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Saint-Chevalier/GRIMOIRE.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Saint-Chevalier/GRIMOIRE/issues"
+  },
+  "homepage": "https://github.com/Saint-Chevalier/GRIMOIRE#readme"
+}

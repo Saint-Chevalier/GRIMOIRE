@@ -50,8 +50,8 @@ There is **no** `package.json`, **no** `npm install`, **no** `requirements.txt`,
 ### Run cold (clone → serve → open)
 
 ```bash
-git clone https://github.com/Saint-Chevalier/grimoire-app.git
-cd grimoire-app
+git clone https://github.com/Saint-Chevalier/GRIMOIRE.git
+cd GRIMOIRE
 
 # Option A — Python (proven smoke path)
 python -m http.server 5173
@@ -65,7 +65,7 @@ Open the printed URL (e.g. `http://localhost:5173`).
 **Do not** run `npm install` or `pip install` — there are no project dependencies. Those commands **false-fail** a healthy cold run.
 
 ### Public demo (GitHub Pages)
-When Pages is enabled: **https://saint-chevalier.github.io/grimoire-app/**  
+When Pages is enabled: **https://saint-chevalier.github.io/GRIMOIRE/**  
 (Relative asset paths; pure static. Vault stays private — demo is browser-local only.)
 
 ### Demo flow (10–15s proof)
