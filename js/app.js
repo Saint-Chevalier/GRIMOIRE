@@ -3447,9 +3447,9 @@ function spellActionsHtml(spell, convo, { isSent }) {
 }
 
 /**
- * Compact spell-card actions: Send to Session0 | Send to [session] (+ SELF-CAST).
+ * Compact spell-card actions: Send to [session] (+ SELF-CAST). Session0 retired.
  * Clipboard-first manual cast — copies full spell text. No HTTP. No auto-delivery.
- * "Send to Session0" shows when linkedSession resolves to Session0 (or default master).
+ * Session0 is retired; active send shows only for linked non-Session0 sessions.
  */
 function spellCardSendActionsHtml(spell, convo) {
   if (!spell) return "";
@@ -3459,17 +3459,12 @@ function spellCardSendActionsHtml(spell, convo) {
     spell.status === "sent" ||
     spell.status === "archived";
   const self = shouldShowSelfCastButton(spell, convo);
-  const sendLabel = spellSendTargetLabel(spell, convo);
   const linked = resolveSpellLinkedSession(spell, convo);
   const isMaster = !linked || isSession0(linked);
-  // Session0 master path: always show. Fleet-node path: show when a linked session exists.
-  const showSend = !isHist && (isMaster || Boolean(linked));
+  const showSend = !isHist && !isMaster && Boolean(linked);
+  const sendLabel = showSend ? `Send to ${linked}` : "";
   const sendBtn = showSend
-    ? `<button type="button" class="btn-spell session0-send${isMaster ? " is-session0" : " is-fleet-node"}" data-action="send-session0" title="${escapeHtml(
-        isMaster
-          ? "Copy full spell text — paste into Hermes Session0 (manual cast)"
-          : `Copy full spell text — paste into Hermes ${linked} (manual cast)`
-      )}">${escapeHtml(sendLabel)}</button>`
+    ? `<button type="button" class="btn-spell session0-send is-fleet-node" data-action="send-session0" title="${escapeHtml(`Copy full spell text — paste into Hermes ${linked} (manual cast)`)}">${escapeHtml(sendLabel)}</button>`
     : "";
   const selfBtn = self
     ? `<button type="button" class="btn-spell self-cast" data-action="self-cast" title="SELF-CAST into Focus chat">SELF-CAST</button>`
@@ -3499,8 +3494,13 @@ async function manualSendSpellToSession(spell, { source = "operator" } = {}) {
 
   let session = resolveSpellLinkedSession(spell, focus);
   if (!session) {
-    session = SESSION0_NAME;
-    spell.linkedSession = SESSION0_NAME;
+    if (SESSION0_RETIRED) {
+      session = "";
+      spell.linkedSession = "";
+    } else {
+      session = SESSION0_NAME;
+      spell.linkedSession = SESSION0_NAME;
+    }
   } else {
     spell.linkedSession = session;
   }
@@ -3549,7 +3549,7 @@ async function manualSendSpellToSession(spell, { source = "operator" } = {}) {
   renderConvoList();
 
   const sessionLabel = isSession0(session) ? SESSION0_NAME : session;
-  toast(`Copied — paste into Hermes ${sessionLabel}`, "success");
+  toast(SESSION0_RETIRED && isSession0(session) ? `Copied — ${SESSION0_NAME} retired · record only` : `Copied — paste into Hermes ${sessionLabel}`, "success");
   activityPing(`✦ Copied · ${spellFaceTitle(spell)} → Hermes ${sessionLabel}`);
   pushBusActivity({
     kind: "manual-cast-copy",
@@ -3874,17 +3874,19 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
           <span class="fleet-cast-status" data-cast="${escapeHtml(spell.castStatus || "pending")}">${escapeHtml(
             String(spell.castStatus || "pending").toUpperCase()
           )}</span>
-          <button type="button" class="btn-secondary btn-sm session0-send${isSession0BroadcastTarget(spell, focus) ? " is-session0" : " is-fleet-node"}" data-action="fleet-deploy-now" title="Route through Session0">
+          <button type="button" class="btn-secondary btn-sm session0-send is-fleet-node" data-action="fleet-deploy-now" title="Route to linked session">
             ${escapeHtml(spellSendTargetLabel(spell, focus))}
           </button>
         </div>
         <p class="contrib-empty">
-          <span class="session0-badge${isSession0BroadcastTarget(spell, focus) ? " is-master" : ""}">${escapeHtml(
-            isSession0BroadcastTarget(spell, focus)
-              ? "Session0 · master"
-              : `via Session0 → ${resolveSpellLinkedSession(spell, focus) || "—"}`
+          <span class="session0-badge${isSession0BroadcastTarget(spell, focus) && !SESSION0_RETIRED ? " is-master" : ""}">${escapeHtml(
+            SESSION0_RETIRED
+              ? "Session0 · retired"
+              : isSession0BroadcastTarget(spell, focus)
+                ? "Session0 · master"
+                : `via Session0 → ${resolveSpellLinkedSession(spell, focus) || "—"}`
           )}</span>
-          · linked: ${escapeHtml(resolveSpellLinkedSession(spell, focus) || "Session0 (default)")}
+          · linked: ${escapeHtml(resolveSpellLinkedSession(spell, focus) || "none")}
           ${spell.autoCastError ? ` · ${escapeHtml(spell.autoCastError)}` : ""}
         </p>
       </div>
@@ -8637,14 +8639,13 @@ async function renderBrainLog(focus) {
       <p class="fleet-motto">the scroll never forgets. the saint always remembers.</p>
       <div class="session0-orchestrator-banner" role="status">
         <div class="session0-orchestrator-head">
-          <span class="session0-badge is-master">Session0</span>
-          <strong>Master orchestrator</strong>
-          <span class="session0-orchestrator-role">Hermes /msg · fleet broadcast</span>
+          <span class="session0-badge is-retired">Session0</span>
+          <strong>Retired orchestrator</strong>
+          <span class="session0-orchestrator-role">Kept as record only · no active routing</span>
         </div>
         <p class="session0-orchestrator-copy">
-          GRIMOIRE sends spells to <strong>Session0</strong> only.
-          Session0 reaches fleet sessions via native Hermes <code>/msg</code>.
-          Responses consolidate back here — never message individual Hermes sessions directly.
+          Session0 is retired. Spells route to linked sessions only.
+          Responses still consolidate back here — never message individual Hermes sessions directly.
         </p>
         ${
           master
@@ -8722,13 +8723,13 @@ async function renderBrainLog(focus) {
                   (r) => `<div class="brain-session-send-row${r.isMaster ? " is-session0-master" : ""}" data-focus-id="${escapeHtml(r.id)}">
               <div class="brain-session-send-meta">
                 <strong>${escapeHtml(r.name)}</strong>
-                ${r.isMaster ? `<span class="session0-badge is-master">Session0</span>` : `<span class="fleet-role-badge is-fleet">fleet</span>`}
+                ${r.isMaster ? `<span class="session0-badge is-retired">Session0 · retired</span>` : `<span class="fleet-role-badge is-fleet">fleet</span>`}
                 <span class="fleet-session">${escapeHtml(r.session)}</span>
                 <span class="hermes-delivery-status" data-status="${escapeHtml(r.deliveryStatus || "")}">${escapeHtml(r.deliveryLabel || "")}</span>
               </div>
               <div class="hermes-send-row brain-hermes-send">
-                <input type="text" class="hermes-send-input" data-brain-send-input="${escapeHtml(r.id)}" placeholder="${r.isMaster ? "Broadcast via Session0…" : `Relay via Session0 → ${escapeHtml(r.session)}…`}" autocomplete="off" />
-                <button type="button" class="btn-primary btn-sm session0-send${r.isMaster ? " is-session0" : " is-fleet-node"}" data-fleet-action="send" data-id="${escapeHtml(r.id)}">${r.isMaster ? "Send to Session0" : `Send to ${escapeHtml(r.session)}`}</button>
+                <input type="text" class="hermes-send-input" data-brain-send-input="${escapeHtml(r.id)}" placeholder="${r.isMaster ? "Session0 retired — no active routing" : `Relay via Session0 → ${escapeHtml(r.session)}…`}" autocomplete="off" />
+                <button type="button" class="btn-primary btn-sm session0-send${r.isMaster ? " is-session0 is-retired" : " is-fleet-node"}" data-fleet-action="send" data-id="${escapeHtml(r.id)}" ${r.isMaster ? "disabled" : ""}>${r.isMaster ? "Session0 retired" : `Send to ${escapeHtml(r.session)}`}</button>
               </div>
             </div>`
                 )
@@ -8912,9 +8913,11 @@ function syncEditHermesSendUi(focus) {
   if (btn) {
     const label = spellSendTargetLabel({ linkedSession: focus?.linkedSession }, focus);
     btn.textContent = label;
-    btn.title = isSession0(focus?.linkedSession)
-      ? "Send to Session0 (master orchestrator)"
-      : `Route via Session0 → ${normalizeLinkedSessionLabel(focus?.linkedSession)}`;
+    btn.title = SESSION0_RETIRED && isSession0(focus?.linkedSession)
+      ? "Session0 retired — record only"
+      : isSession0(focus?.linkedSession)
+        ? "Send to Session0 (master orchestrator)"
+        : `Route via Session0 → ${normalizeLinkedSessionLabel(focus?.linkedSession)}`;
     btn.classList.toggle("is-session0", isSession0(focus?.linkedSession));
     btn.classList.toggle("is-fleet-node", !isSession0(focus?.linkedSession));
   }
@@ -8965,9 +8968,11 @@ async function sendToLinkedSession(focus, text, { silent = false } = {}) {
   persist();
   renderConvoList();
   if (!silent) {
-    const label = isSession0(linked)
-      ? `Copied — paste into Hermes ${SESSION0_NAME}`
-      : `Copied — paste into Hermes ${linked}`;
+    const label = SESSION0_RETIRED && isSession0(linked)
+      ? `Copied — ${SESSION0_NAME} retired · record only`
+      : isSession0(linked)
+        ? `Copied — paste into Hermes ${SESSION0_NAME}`
+        : `Copied — paste into Hermes ${linked}`;
     toast(status === "sent" ? label : "Copy failed", status === "sent" ? "success" : "");
   }
   pushBusActivity({
@@ -9047,8 +9052,13 @@ async function runAutoCastSpell(spell, { source = "operator", force = false } = 
   // Default linked session → Session0 when focus has none (fleet broadcast path)
   let session = resolveSpellLinkedSession(spell, focus);
   if (!session) {
-    session = SESSION0_NAME;
-    spell.linkedSession = SESSION0_NAME;
+    if (SESSION0_RETIRED) {
+      session = "";
+      spell.linkedSession = "";
+    } else {
+      session = SESSION0_NAME;
+      spell.linkedSession = SESSION0_NAME;
+    }
   } else {
     spell.linkedSession = session;
   }
@@ -9148,9 +9158,11 @@ async function runAutoCastSpell(spell, { source = "operator", force = false } = 
   persist();
   renderSpells();
   renderConvoList();
-  const toastLabel = isSession0(session)
-    ? `Copied — paste into Hermes ${SESSION0_NAME}`
-    : `Copied — paste into Hermes ${session}`;
+  const toastLabel = SESSION0_RETIRED && isSession0(session)
+    ? `Copied — ${SESSION0_NAME} retired · record only`
+    : isSession0(session)
+      ? `Copied — paste into Hermes ${SESSION0_NAME}`
+      : `Copied — paste into Hermes ${session}`;
   toast(toastLabel, "success");
   activityPing(
     `✦ Session0 · ${spellFaceTitle(spell)} → ${broadcast ? "broadcast" : session}`

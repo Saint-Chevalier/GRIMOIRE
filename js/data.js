@@ -1390,6 +1390,9 @@ export function normalizeSpell(spell) {
   if (spell.refinementNote == null) spell.refinementNote = "";
   if (!Array.isArray(spell.glyphs)) spell.glyphs = [];
 
+  // ── Spell Crafter: ensure mastery/tier fields on every spell ──
+  ensureSpellCrafterFields(spell);
+
   return spell;
 }
 
@@ -1728,6 +1731,8 @@ export const HERMES_LOCAL_SEND_URL =
 // ── Session0 · Hermes fleet orchestrator ───────────────────────────────────
 /** Canonical Hermes master-orchestrator session name */
 export const SESSION0_NAME = "Session0";
+/** Session0 is retired as an active target. Kept as a record only. */
+export const SESSION0_RETIRED = true;
 /** Accept common aliases for linkedSession / labels */
 export const SESSION0_ALIASES = Object.freeze([
   "session0",
@@ -1779,6 +1784,7 @@ export function resolveSpellLinkedSession(spell, focus = null) {
  */
 export function spellSendTargetLabel(spell, focus = null) {
   const session = resolveSpellLinkedSession(spell, focus);
+  if (SESSION0_RETIRED && (!session || isSession0(session))) return `${SESSION0_NAME} (retired)`;
   if (!session || isSession0(session)) return `Send to ${SESSION0_NAME}`;
   return `Send to ${session}`;
 }
@@ -1797,6 +1803,7 @@ export function isSession0BroadcastTarget(spell, focus = null) {
  * become orchestration targets inside the payload — never direct inject IDs.
  */
 export function resolveHermesInjectSessionId(_linkedSession) {
+  if (SESSION0_RETIRED) return "";
   return SESSION0_NAME;
 }
 
@@ -1823,7 +1830,6 @@ export function listFleetSessions(conversations = []) {
 
 /**
  * Payload for POST to HERMES_LOCAL_SEND_URL.
- * Always injects Session0 unless explicit override (tests only).
  */
 export function makeHermesDeliveryPayload({
   text = "",
@@ -1831,10 +1837,12 @@ export function makeHermesDeliveryPayload({
   sessionId = "",
   orchestrate = true,
 } = {}) {
-  const injectId = orchestrate
-    ? resolveHermesInjectSessionId(sessionId || focus?.linkedSession)
-    : String(sessionId || focus?.linkedSession || SESSION0_NAME).trim() ||
-      SESSION0_NAME;
+  const rawSession = String(sessionId || focus?.linkedSession || "").trim();
+  const injectId = SESSION0_RETIRED
+    ? rawSession || ""
+    : orchestrate
+      ? resolveHermesInjectSessionId(rawSession)
+      : rawSession || SESSION0_NAME;
   return {
     sessionId: injectId,
     text: String(text || "").trim(),
@@ -1842,7 +1850,7 @@ export function makeHermesDeliveryPayload({
     // optional provenance (local only)
     focusId: focus?.id || null,
     focusName: focus?.name || null,
-    orchestrator: SESSION0_NAME,
+    orchestrator: SESSION0_RETIRED ? "retired" : SESSION0_NAME,
   };
 }
 
@@ -6020,4 +6028,191 @@ export function parseEntityMarkdown(text) {
   } catch {
     return createEmptyEntity();
   }
+}
+
+// ============================================================
+// SPELL CRAFTER — TIERS / MASTERY / UPGRADES
+// ============================================================
+
+/** Spell mastery tiers */
+export const SPELL_TIERS = Object.freeze([
+  "initiate",
+  "adept",
+  "master",
+  "archon",
+]);
+
+/** Tier display order */
+export const SPELL_TIER_ORDER = Object.freeze({
+  initiate: 0,
+  adept: 1,
+  master: 2,
+  archon: 3,
+});
+
+/** Tier → label + color */
+export const SPELL_TIER_META = Object.freeze({
+  initiate: { label: "Initiate", color: "#94a3b8" },
+  adept: { label: "Adept", color: "#3b82f6" },
+  master: { label: "Master", color: "#a855f7" },
+  archon: { label: "Archon", color: "#f59e0b" },
+});
+
+/**
+ * Ensure spell has crafter fields.
+ * Call from normalizeSpell or on write.
+ */
+export function ensureSpellCrafterFields(spell) {
+  if (!spell || typeof spell !== "object") return;
+  if (!SPELL_TIERS.includes(spell.tier)) spell.tier = "initiate";
+  if (!Number.isFinite(spell.mastery)) spell.mastery = 0;
+  if (!Number.isFinite(spell.castCount)) spell.castCount = 0;
+  if (!Array.isArray(spell.upgradeLog)) spell.upgradeLog = [];
+  if (!Array.isArray(spell.evolutionTriggers)) spell.evolutionTriggers = [];
+  if (!spell.unlockedAt) spell.unlockedAt = spell.createdAt || Date.now();
+  if (spell.lastUpgradeAt == null) spell.lastUpgradeAt = null;
+}
+
+/**
+ * Compute next tier from mastery.
+ */
+export function nextTierForMastery(mastery) {
+  const m = Number(mastery) || 0;
+  if (m >= 250) return "archon";
+  if (m >= 100) return "master";
+  if (m >= 30) return "adept";
+  return "initiate";
+}
+
+/**
+ * Evaluate whether a spell should upgrade.
+ * Returns upgrade object or null.
+ */
+export function evaluateSpellUpgrade(spell, intelContext = {}) {
+  ensureSpellCrafterFields(spell);
+  const current = spell.tier;
+  const next = nextTierForMastery(spell.mastery);
+  if (current === next) return null;
+
+  const masteryGain = computeMasteryGain(spell, intelContext);
+  if (masteryGain <= 0) return null;
+
+  return {
+    fromTier: current,
+    toTier: next,
+    masteryGain,
+    reason: upgradeReason(spell, intelContext),
+    suggestedRefinements: suggestRefinements(spell, intelContext),
+  };
+}
+
+/**
+ * Apply an upgrade to spell.
+ */
+export function applySpellUpgrade(spell, upgrade, opts = {}) {
+  ensureSpellCrafterFields(spell);
+  if (!upgrade || !upgrade.toTier) return spell;
+
+  const prev = spell.tier;
+  spell.tier = upgrade.toTier;
+  spell.mastery = Math.min(250, (spell.mastery || 0) + (upgrade.masteryGain || 0));
+  spell.lastUpgradeAt = Date.now();
+  spell.refinementNote = upgrade.reason || spell.refinementNote || `Upgraded ${prev} → ${upgrade.toTier}`;
+
+  spell.upgradeLog = Array.isArray(spell.upgradeLog) ? spell.upgradeLog : [];
+  spell.upgradeLog.push({
+    from: prev,
+    to: upgrade.toTier,
+    mastery: spell.mastery,
+    reason: spell.refinementNote,
+    at: spell.lastUpgradeAt,
+  });
+
+  if (opts.refine && upgrade.suggestedRefinements?.length) {
+    const best = upgrade.suggestedRefinements[0];
+    if (best?.content) {
+      refineSpellVersion(spell, {
+        content: best.content,
+        title: best.title,
+        subtitle: best.subtitle,
+        note: `Auto-upgrade: ${best.reason || upgrade.toTier} refinement`,
+      });
+    }
+  }
+
+  return spell;
+}
+
+function computeMasteryGain(spell, intel) {
+  let gain = 0;
+  gain += Math.min(10, (Number(spell.castCount) || 0));
+  gain += Math.min(15, (intel.entityCount || 0) * 2);
+  gain += Math.min(10, (intel.nodeCount || 0) * 3);
+  gain += Math.min(10, (intel.experienceCount || 0) * 1);
+  gain += intel.hasAlignment ? 5 : 0;
+  gain += intel.hasEntityFacts ? 5 : 0;
+  return Math.floor(gain);
+}
+
+function upgradeReason(spell, intel) {
+  const reasons = [];
+  if ((Number(spell.castCount) || 0) >= 5) reasons.push("proven in cast");
+  if (intel.entityCount > 0) reasons.push("entity intel captured");
+  if (intel.nodeCount > 0) reasons.push("node network densened");
+  if (intel.hasAlignment) reasons.push("alignment locked");
+  if (intel.hasEntityFacts) reasons.push("entity facts enriched");
+  return reasons.join(" + ") || "mastery threshold reached";
+}
+
+function suggestRefinements(spell, intel) {
+  const suggestions = [];
+  const content = String(spell.content || spell.message || "");
+  if (intel.nodeCount > 0 && !content.toLowerCase().includes("node")) {
+    suggestions.push({
+      title: spell.title,
+      content: `${content}\n\n[Upgrade] Reference linked node: ${intel.nodeNames?.join(", ") || "known nodes"}.`,
+      subtitle: spell.subtitle,
+      reason: "adds node context",
+    });
+  }
+  if (intel.hasAlignment && !content.toLowerCase().includes("alignment")) {
+    suggestions.push({
+      title: spell.title,
+      content: `[Upgrade] Alignment locked. Use this directive against the sealed frame.\n\n${content}`,
+      subtitle: spell.subtitle,
+      reason: "locks to alignment",
+    });
+  }
+  if (intel.entityFacts?.length && !content.toLowerCase().includes("entity")) {
+    suggestions.push({
+      title: spell.title,
+      content: `${content}\n\n[Upgrade] Entity facts: ${intel.entityFacts.slice(0, 3).join("; ")}.`,
+      subtitle: spell.subtitle,
+      reason: "adds entity facts",
+    });
+  }
+  return suggestions;
+}
+
+/**
+ * Build spell crafter context from vault + focus state.
+ */
+export async function buildSpellCrafterContext(convo) {
+  const entities = await readAllEntitiesFromVault();
+  const experiences = await readExperiencesFromVault();
+  const nodes = buildScrollNodesFromConversations();
+  const hasAlignment = convo?.alignmentProfile?.signal != null;
+  const hasEntityFacts = entities.some((e) => Object.values(e.facts || {}).some((d) => Object.keys(d || {}).length > 0));
+
+  return {
+    entityCount: entities.length,
+    nodeCount: nodes.length,
+    experienceCount: experiences.length,
+    hasAlignment,
+    hasEntityFacts,
+    entityFacts: entities
+      .slice(0, 10)
+      .flatMap((e) => Object.entries(e.facts || {}).flatMap(([d, facts]) => Object.entries(facts || {}).map(([k, v]) => `${e.name} ${k}: ${v}`))),
+    nodeNames: nodes.slice(0, 5).map((n) => n.name).filter(Boolean),
+  };
 }
