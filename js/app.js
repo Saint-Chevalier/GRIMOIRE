@@ -131,6 +131,13 @@ import {
   buildGrimoireSovereignEvolutionRoadmap,
   SOVEREIGN_EVOLUTION_SLUG,
   ROADMAP_STATUSES,
+  SPELL_TIERS,
+  SPELL_TIER_ORDER,
+  SPELL_TIER_META,
+  ensureSpellCrafterFields,
+  evaluateSpellUpgrade,
+  applySpellUpgrade,
+  buildSpellCrafterContext,
 } from "./data.js?v=session0-fleet-1";
 import {
   randomStarPosition,
@@ -3372,6 +3379,8 @@ function spellCardFaceHtml(spell, convo, _opts = {}) {
       <div class="spell-face-top">
         <h3 class="spell-face-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
         <span class="spell-face-version" title="Version">v${iter}</span>
+        <span class="spell-face-tier spell-tier-${escapeAttr(spell.tier)}" title="Tier: ${escapeHtml(spell.tier)}">${escapeHtml(spell.tier)}</span>
+        <span class="spell-face-mastery" title="Mastery">${spell.mastery || 0}</span>
       </div>
       <div class="spell-face-row">
         <span
@@ -8329,6 +8338,9 @@ function commitSpell(convo, spell, { silentToast = false } = {}) {
     setSpellsOpen(true);
   }
 
+  // Spell Crafter: evaluate upgrade after forge
+  void tryUpgradeSpell(spell, convo);
+
   persist();
   renderSpells();
   renderConvoList();
@@ -10178,6 +10190,12 @@ function markSent(id, { fromCopy = false, fromSelfCast = false, silent = false }
     });
   }
   if (fromSelfCast) spell.selfCastAt = now;
+
+  // Spell Crafter: evaluate upgrade after cast
+  const convoForUpgrade = state.conversations.find((c) => c.id === spell.conversationId);
+  if (convoForUpgrade) {
+    void tryUpgradeSpell(spell, convoForUpgrade);
+  }
 
   // If alignment was sent without a reply yet, nudge user (skip when silent / already answered)
   if (isAlignmentSpell(spell) && !fromSelfCast && !silent && !spell.answeredAt) {
@@ -12345,3 +12363,18 @@ window.addEventListener("error", (ev) => {
 window.addEventListener("unhandledrejection", (ev) => {
   console.warn("[app-global] unhandledrejection", ev.reason);
 });
+
+/**
+ * Spell Crafter: evaluate upgrade after cast/forge.
+ * Mutates spell in place when conditions are met.
+ */
+async function tryUpgradeSpell(spell, convo) {
+  if (!spell || !convo) return;
+  ensureSpellCrafterFields(spell);
+  const ctx = await buildSpellCrafterContext(convo);
+  const upgrade = evaluateSpellUpgrade(spell, ctx);
+  if (!upgrade) return;
+
+  applySpellUpgrade(spell, upgrade, { refine: true });
+  toast(`✦ Spell upgraded: ${upgrade.fromTier} → ${upgrade.toTier}`, "success");
+}

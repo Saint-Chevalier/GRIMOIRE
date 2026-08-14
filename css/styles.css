@@ -6370,3 +6370,33 @@ button.session0-send.is-fleet-node {
   font-size: 11px;
   color: #64748b;
 }
+
+/* Spell Crafter badges */
+.spell-face-tier {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 0.08rem 0.34rem;
+  line-height: 1.2;
+  margin-top: 0.05rem;
+}
+.spell-tier-initiate { color: #94a3b8; background: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.25); }
+.spell-tier-adept { color: #3b82f6; background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25); }
+.spell-tier-master { color: #a855f7; background: rgba(168,85,247,0.12); border: 1px solid rgba(168,85,247,0.25); }
+.spell-tier-archon { color: #f59e0b; background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.25); }
+
+.spell-face-mastery {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: rgba(226, 232, 240, 0.85);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px;
+  padding: 0.08rem 0.3rem;
+  line-height: 1.2;
+  margin-top: 0.05rem;
+}
