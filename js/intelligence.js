@@ -3990,3 +3990,100 @@ export async function autoCaptureExperienceFromText(text, opts = {}) {
     return null;
   }
 }
+
+/**
+ * Comprehensive vault audit: read all captured intelligence types.
+ * Returns structured summary for the audit panel.
+ */
+export async function auditVaultIntelligence(opts = {}) {
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) {
+    return { ok: false, error: "no vault linked" };
+  }
+
+  const result = {
+    ok: true,
+    vault: handle.name || "GRIMOIRE-FocusIntelligence",
+    focuses: [],
+    experiences: [],
+    scrollNodes: [],
+    busActivity: [],
+    generatedAt: new Date().toISOString(),
+  };
+
+  try {
+    // 1. Read top-level entities (focuses)
+    for await (const [name, entry] of handle.entries()) {
+      if (name === "experiences" || name === "README.md" || name.startsWith(".")) continue;
+      if (entry.kind === "directory") {
+        result.focuses.push({
+          id: name,
+          name,
+          path: `${name}/`,
+        });
+      }
+    }
+
+    // 2. Read experiences
+    result.experiences = await readExperiencesFromVault();
+
+    // 3. Read bus activity from memory
+    result.busActivity = getBusActivityLog().slice(-20);
+
+    // 4. Build scroll nodes from conversations
+    result.scrollNodes = buildScrollNodesFromConversations();
+  } catch (err) {
+    result.error = String(err);
+  }
+
+  return result;
+}
+
+/**
+ * Quick vault health check: counts files, folders, and last write times.
+ */
+export async function vaultHealthCheck() {
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) {
+    return { linked: false };
+  }
+
+  let fileCount = 0;
+  let folderCount = 0;
+  let lastWrite = null;
+
+  try {
+    for await (const [name, entry] of handle.entries()) {
+      if (name.startsWith(".")) continue;
+      if (entry.kind === "directory") {
+        folderCount++;
+        try {
+          for await (const [fname, file] of entry.entries()) {
+            if (fname.endsWith(".md")) {
+              fileCount++;
+              try {
+                const fm = await file.queryPermission({ mode: "readwrite" });
+              } catch {
+                // ignore permission errors
+              }
+            }
+          }
+        } catch {
+          // ignore subdirectory errors
+        }
+      } else if (name.endsWith(".md")) {
+        fileCount++;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return {
+    linked: true,
+    name: handle.name,
+    fileCount,
+    folderCount,
+    lastWrite: lastWrite,
+  };
+}

@@ -245,54 +245,50 @@
       <div class="spells-list" id="spells-list"></div>
     </aside>
 
-    <!-- RIGHT: Experiences panel -->
-    <aside class="experiences-panel" id="experiences-panel" hidden>
-      <header class="experiences-header">
-        <div class="experiences-title-wrap">
+    <!-- RIGHT: Intelligence Audit panel -->
+    <aside class="intel-audit-panel" id="intel-audit-panel" hidden>
+      <header class="intel-audit-header">
+        <div class="intel-audit-title-wrap">
           <button
             type="button"
-            class="experiences-title-btn"
-            id="btn-experiences-title"
+            class="intel-audit-title-btn"
+            id="btn-intel-audit-title"
             aria-haspopup="menu"
             aria-expanded="false"
-            title="Experience log options"
-            aria-label="Experiences menu"
+            title="Intelligence audit"
+            aria-label="Intelligence audit"
           >
-            Experiences
+            Intelligence Audit
           </button>
-          <div class="experiences-title-menu" id="experiences-title-menu" role="menu" hidden>
-            <button type="button" class="experiences-title-menu-item" role="menuitem" id="btn-new-experience" data-action="new-experience">
-              New experience
-            </button>
-            <button type="button" class="experiences-title-menu-item" role="menuitem" id="btn-refresh-experiences" data-action="refresh-experiences">
-              Refresh
-            </button>
-          </div>
         </div>
-        <div class="experiences-header-actions">
-          <button type="button" class="btn-icon subtle" id="btn-close-experiences" title="Collapse panel" aria-label="Collapse Experiences panel">›</button>
+        <div class="intel-audit-header-actions">
+          <button type="button" class="btn-icon subtle" id="btn-close-intel-audit" title="Collapse panel" aria-label="Collapse Intelligence audit panel">›</button>
         </div>
       </header>
-      <div class="experiences-toolbar" id="experiences-toolbar">
-        <input
-          type="search"
-          id="experience-search"
-          class="experience-search"
-          placeholder="Search experiences…"
-          autocomplete="off"
-          spellcheck="false"
-          aria-label="Search experiences"
-        />
-        <select id="experience-status-filter" class="experience-status-filter" aria-label="Status filter">
-          <option value="all">All</option>
-          <option value="completed">Completed</option>
-          <option value="ongoing">Ongoing</option>
-          <option value="abandoned">Abandoned</option>
-          <option value="superseded">Superseded</option>
-        </select>
+      <div class="intel-audit-toolbar" id="intel-audit-toolbar">
+        <button type="button" class="intel-audit-tab active" data-tab="overview" id="tab-audit-overview">Overview</button>
+        <button type="button" class="intel-audit-tab" data-tab="experiences" id="tab-audit-experiences">Experiences</button>
+        <button type="button" class="intel-audit-tab" data-tab="focuses" id="tab-audit-focuses">Focuses</button>
+        <button type="button" class="intel-audit-tab" data-tab="scroll" id="tab-audit-scroll">Scroll Nodes</button>
+        <button type="button" class="intel-audit-tab" data-tab="bus" id="tab-audit-bus">Bus Activity</button>
       </div>
-      <p class="experiences-hint" id="experiences-hint">Operational memory: what happened, what I did, why, how, outcome, lessons.</p>
-      <div class="experiences-list" id="experiences-list"></div>
+      <div class="intel-audit-content" id="intel-audit-content">
+        <div class="intel-audit-tab-panel active" data-panel="overview" id="panel-audit-overview">
+          <div class="intel-audit-empty">Loading vault overview…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="experiences" id="panel-audit-experiences" hidden>
+          <div class="intel-audit-empty">Loading experiences…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="focuses" id="panel-audit-focuses" hidden>
+          <div class="intel-audit-empty">Loading focuses…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="scroll" id="panel-audit-scroll" hidden>
+          <div class="intel-audit-empty">Loading scroll nodes…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="bus" id="panel-audit-bus" hidden>
+          <div class="intel-audit-empty">Loading bus activity…</div>
+        </div>
+      </div>
     </aside>
   </div>
 
@@ -1041,53 +1037,128 @@ r
       document.addEventListener("click", function (e) {
         const btn = e.target.closest("#btn-toggle-experiences");
         if (btn) {
-          const panel = document.getElementById("experiences-panel");
+          const panel = document.getElementById("intel-audit-panel");
           const spellsPanel = document.getElementById("spells-panel");
           if (panel) {
             const hidden = panel.hasAttribute("hidden");
             if (hidden) {
               panel.removeAttribute("hidden");
               if (spellsPanel) spellsPanel.setAttribute("hidden", "");
-              renderExperiencesList();
+              renderIntelAudit();
             } else {
               panel.setAttribute("hidden", "");
             }
           }
         }
-        if (btn) openExperienceOverlay();
       });
 
       window.__openExperienceOverlay = openExperienceOverlay;
       window.__closeExperienceOverlay = closeExperienceOverlay;
 
-      async function renderExperiencesList() {
-        const list = document.getElementById("experiences-list");
-        if (!list) return;
-        list.innerHTML = '<div class="experience-empty">Loading…</div>';
+      function switchAuditTab(tabName) {
+        document.querySelectorAll(".intel-audit-tab-panel").forEach(p => p.hidden = true);
+        document.querySelectorAll(".intel-audit-tab").forEach(t => t.classList.remove("active"));
+        const panel = document.getElementById("panel-audit-" + tabName);
+        const tabBtn = document.getElementById("tab-audit-" + tabName);
+        if (panel) panel.hidden = false;
+        if (tabBtn) tabBtn.classList.add("active");
+      }
+
+      document.querySelectorAll(".intel-audit-tab").forEach(btn => {
+        btn.addEventListener("click", () => switchAuditTab(btn.dataset.tab));
+      });
+
+      document.getElementById("btn-close-intel-audit")?.addEventListener("click", () => {
+        const panel = document.getElementById("intel-audit-panel");
+        if (panel) panel.setAttribute("hidden", "");
+      });
+
+      async function renderIntelAudit() {
         try {
           const intelMod = await import("./js/intelligence.js?v=experience-layer-1");
-          const items = await intelMod.readExperiencesFromVault();
-          if (!items.length) {
-            list.innerHTML = '<div class="experience-empty">No experiences captured yet.</div>';
-            return;
-          }
-          list.innerHTML = "";
-          for (const exp of items.slice(0, 50)) {
-            const el = document.createElement("div");
-            el.className = "experience-item";
-            const tags = (exp.tags || []).map(t => `<span class="experience-tag">${t}</span>`).join("");
-            const date = exp.date_range?.start || exp.created_at || "";
-            el.innerHTML = `
-              <div class="experience-item-title">${exp.title || "Untitled"}</div>
-              <div class="experience-item-meta">${date ? new Date(date).toLocaleString() : ""} · ${exp.certainty || "unknown"}</div>
-              <div class="experience-item-body">${exp.summary || exp.what_happened || ""}</div>
-              <div class="experience-item-tags">${tags}</div>
+          const audit = await intelMod.auditVaultIntelligence();
+          
+          // Overview tab
+          const overview = document.getElementById("panel-audit-overview");
+          if (overview && audit.ok) {
+            overview.innerHTML = `
+              <div class="intel-audit-section">
+                <div class="intel-audit-section-title">Vault: ${audit.vault}</div>
+                <div class="intel-audit-metrics">
+                  <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.focuses.length}</span><span class="intel-audit-metric-label">Focuses</span></div>
+                  <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.experiences.length}</span><span class="intel-audit-metric-label">Experiences</span></div>
+                  <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.scrollNodes.length}</span><span class="intel-audit-metric-label">Scroll Nodes</span></div>
+                  <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.busActivity.length}</span><span class="intel-audit-metric-label">Bus Events</span></div>
+                </div>
+                <div class="intel-audit-meta">Generated: ${new Date(audit.generatedAt).toLocaleString()}</div>
+              </div>
             `;
-            list.appendChild(el);
+          }
+
+          // Experiences tab
+          const expList = document.getElementById("panel-audit-experiences");
+          if (expList) {
+            if (!audit.experiences.length) {
+              expList.innerHTML = '<div class="intel-audit-empty">No experiences captured yet.</div>';
+            } else {
+              expList.innerHTML = audit.experiences.slice(0, 20).map(exp => `
+                <div class="experience-item">
+                  <div class="experience-item-title">${exp.title || "Untitled"}</div>
+                  <div class="experience-item-meta">${exp.date_range?.start || exp.created_at || ""} · ${exp.certainty || "unknown"}</div>
+                  <div class="experience-item-body">${exp.summary || exp.what_happened || ""}</div>
+                  <div class="experience-item-tags">${(exp.tags || []).map(t => `<span class="experience-tag">${t}</span>`).join("")}</div>
+                </div>
+              `).join("");
+            }
+          }
+
+          // Focuses tab
+          const focusList = document.getElementById("panel-audit-focuses");
+          if (focusList) {
+            if (!audit.focuses.length) {
+              focusList.innerHTML = '<div class="intel-audit-empty">No focuses found in vault.</div>';
+            } else {
+              focusList.innerHTML = audit.focuses.map(f => `
+                <div class="experience-item">
+                  <div class="experience-item-title">${f.name}</div>
+                  <div class="experience-item-meta">${f.path}</div>
+                </div>
+              `).join("");
+            }
+          }
+
+          // Scroll nodes tab
+          const scrollList = document.getElementById("panel-audit-scroll");
+          if (scrollList) {
+            if (!audit.scrollNodes.length) {
+              scrollList.innerHTML = '<div class="intel-audit-empty">No scroll nodes detected.</div>';
+            } else {
+              scrollList.innerHTML = audit.scrollNodes.slice(0, 20).map(node => `
+                <div class="experience-item">
+                  <div class="experience-item-title">${node.name || node.id || "Unnamed"}</div>
+                  <div class="experience-item-meta">${node.type || "node"} · ${node.focus || ""}</div>
+                </div>
+              `).join("");
+            }
+          }
+
+          // Bus activity tab
+          const busList = document.getElementById("panel-audit-bus");
+          if (busList) {
+            if (!audit.busActivity.length) {
+              busList.innerHTML = '<div class="intel-audit-empty">No bus activity recorded.</div>';
+            } else {
+              busList.innerHTML = audit.busActivity.slice(-10).reverse().map(evt => `
+                <div class="experience-item">
+                  <div class="experience-item-title">${evt.type || "event"}</div>
+                  <div class="experience-item-meta">${evt.focus || ""} · ${evt.time || ""}</div>
+                  <div class="experience-item-body">${evt.summary || evt.payload || ""}</div>
+                </div>
+              `).join("");
+            }
           }
         } catch (err) {
-          list.innerHTML = '<div class="experience-empty">Failed to load experiences.</div>';
-          console.warn("[ExperienceAudit] load failed", err);
+          console.warn("[IntelAudit] load failed", err);
         }
       }
     })();
