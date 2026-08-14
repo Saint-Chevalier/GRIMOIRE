@@ -8062,16 +8062,14 @@ function grimoireReplyAiNode(convo, userText, medium) {
     };
   }
 
-  // Gate 2: waiting for paste
+  // Gate 2: waiting for paste — allow normal chat, block only spellcraft
   if (!unlocked) {
-    if (intent) {
+    if (intent || /\b(align|reveal|transparency|who are you|what can you|spell|cast|directive)\b/i.test(userText)) {
       return {
         reply: `**Lock alignment first.** Paste the node's full Alignment reply here (Signal / Capabilities / Constraints / Essence). Then I engineer real directives — not receipts.`,
       };
     }
-    return {
-      reply: `Waiting on alignment reply for **${seal}**. Paste their reveal to unlock. Until then: **Lock alignment first.**`,
-    };
+    // Fall through to normal conversation below
   }
 
   // Gate 3: unlocked — engineer from profile
