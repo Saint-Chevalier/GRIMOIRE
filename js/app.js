@@ -208,6 +208,8 @@ import {
   getBusActivityLog,
   pushBusActivity,
   buildScrollNodesFromConversations,
+  autoCaptureExperienceFromText,
+  detectExperienceFromText,
 } from "./intelligence.js?v=focus-hygiene-2";
 import {
   computeFocusHealth,
@@ -6467,6 +6469,11 @@ function sendMessage(text) {
     images: sentImages,
     ts: Date.now(),
   });
+  // Auto-capture experience intelligence from user turn
+  void autoCaptureExperienceFromText(userText, {
+    focusId: convo.id,
+    focusName: convo.name,
+  });
   touchFocus(convo);
 
   // Chat relay: when ON for this Focus, also copy outbound message for Hermes paste.
@@ -6516,6 +6523,11 @@ function sendMessage(text) {
       role: "grimoire",
       text: turn.reply,
       ts: Date.now(),
+    });
+    // Auto-capture experience intelligence from AI turn
+    void autoCaptureExperienceFromText(turn.reply, {
+      focusId: convo.id,
+      focusName: convo.name,
     });
     // Auto write-back: GRIMOIRE's own response → focus vault (background)
     void queueAutoWriteBack(convo, {

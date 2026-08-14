@@ -3901,3 +3901,86 @@ export async function appendExperienceReferenceToFocus(focus, exp) {
     tags: ["experience", ...(Array.isArray(e.tags) ? e.tags.slice(0, 3) : [])],
   });
 }
+
+/**
+ * Detect experience-worthy content from natural conversation.
+ * Heuristic patterns: realization, lesson, outcome, process, capture.
+ */
+const EXPERIENCE_PATTERNS = [
+  /\b(?:i\s+)?realized\b/i,
+  /\bturns\s+out\b/i,
+  /\bthe\s+lesson\s+was\b/i,
+  /\bi\s+learned\b/i,
+  /\bwhat\s+worked\b/i,
+  /\bwhat\s+didn't\s+work\b/i,
+  /\bif\s+i\s+could\s+do\s+it\s+again\b/i,
+  /\bnext\s+time\s+i'?ll\b/i,
+  /\bthe\s+outcome\s+was\b/i,
+  /\bthe\s+result\s+was\b/i,
+  /\bi\s+should\s+have\b/i,
+  /\bi\s+captured\b/i,
+  /\bexperience\s+intelligence\b/i,
+  /\bdaskw\b/i,
+  /\bwrite\s+to\s+disk\b/i,
+  /\bwrite\s+is\s+the\s+rise\b/i,
+  /\bmoney\s+is\s+(?:just\s+)?(?:throughput|a\s+medium|not\s+the\s+goal)\b/i,
+  /\bthe\s+point\s+is\b/i,
+  /\bthe\s+whole\s+point\b/i,
+  /\bi\s+did\s+x\s+and\s+y\s+happened\b/i,
+  /\bi\s+did\s+this\s+and\b/i,
+];
+
+/**
+ * Build a minimal experience scaffold from conversational text.
+ */
+export function experienceFromText(text, opts = {}) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  const title = t.length > 80 ? t.slice(0, 77) + "..." : t;
+  return {
+    id: `exp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    type: "experience",
+    title,
+    summary: "",
+    what_happened: t,
+    what_i_did: "",
+    why: "",
+    how: "",
+    outcome: "",
+    lessons: "",
+    tags: ["auto-captured", "conversation"],
+    related_focuses: opts.focusId ? [opts.focusId] : [],
+    related_experiences: [],
+    date_range: { start: new Date().toISOString(), end: null },
+    status: "completed",
+    certainty: "inferred",
+    author: "Jacob",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+/**
+ * Heuristic detector: returns experience scaffold if text looks experience-worthy.
+ */
+export function detectExperienceFromText(text, opts = {}) {
+  const t = String(text || "").trim();
+  if (!t || t.length < 20) return null;
+  const hit = EXPERIENCE_PATTERNS.some((re) => re.test(t));
+  if (!hit) return null;
+  return experienceFromText(t, opts);
+}
+
+/**
+ * Silent async capture: detect + write to vault without blocking conversation.
+ */
+export async function autoCaptureExperienceFromText(text, opts = {}) {
+  const exp = detectExperienceFromText(text, opts);
+  if (!exp) return null;
+  try {
+    const result = await writeExperienceToVault(exp);
+    return result && result.ok ? exp : null;
+  } catch {
+    return null;
+  }
+}
