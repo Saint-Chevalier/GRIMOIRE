@@ -8107,8 +8107,9 @@ function grimoireReplyAiNode(convo, userText, medium) {
   }
 
   const n = convo.alignmentProfile?.directives?.length || 0;
+  const alignmentStatus = n ? ` with **${n} directives** on file` : " — alignment not yet revealed";
   return {
-    reply: `Holding **${seal}** with alignment on file${n ? ` (${n} directives)` : ""}. Ask for a spell when you want an engineered cast. Focus stays the sun — multi-node routes + linked-intel curiosity allowed.`,
+    reply: `Holding **${seal}**${alignmentStatus}. Normal chat is open; spellcraft unlocks after Alignment Reveal. What do you want to work through?`,
   };
 }
 
