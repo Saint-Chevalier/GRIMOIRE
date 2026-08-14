@@ -6123,3 +6123,86 @@ button.session0-send.is-fleet-node {
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
 }
+
+/* ─── Experience overlay ─── */
+.experience-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(6px);
+}
+.experience-modal {
+  width: min(520px, 94vw);
+  max-height: min(86vh, 720px);
+  overflow-y: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  background: rgba(8, 8, 16, 0.98);
+  color: var(--text);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+.experience-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.experience-header strong {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  color: var(--gold);
+}
+.experience-close {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.experience-body {
+  padding: 0.85rem 1rem;
+}
+.experience-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.experience-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.experience-form input,
+.experience-form textarea {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(140, 160, 255, 0.18);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+  outline: none;
+}
+.experience-form input:focus,
+.experience-form textarea:focus {
+  border-color: rgba(167, 139, 250, 0.45);
+}
+.experience-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
+}
+.experience-foot {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 0.4rem;
+  min-height: 1.1rem;
+}

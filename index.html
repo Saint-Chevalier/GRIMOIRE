@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/styles.css?v=recover-1" />
+  <link rel="stylesheet" href="css/styles.css?v=experience-layer-1" />
 </head>
 <body>
   <!-- WORLD: full-viewport universe canvas (z-index 0; .app is transparent over it) -->
@@ -142,6 +142,9 @@
           <button type="button" class="btn-icon" id="btn-universe-view" title="Hide chat — view universe only (stars · lines · Focus nucleus)" aria-label="Hide chat, view universe only" aria-pressed="false">
             <span class="universe-view-icon" aria-hidden="true">☉</span>
           </button>
+          <button type="button" class="btn-icon" id="btn-toggle-experiences" title="Experiences — operational memory log" aria-label="Toggle Experiences panel">
+            <span class="experiences-icon" aria-hidden="true">◈</span>
+          </button>
           <button type="button" class="btn-icon" id="btn-toggle-spells" title="Toggle Spells panel" aria-label="Toggle Spells panel">
             <span class="spell-icon">✦</span>
             <span class="spell-count" id="spell-count" data-count="0"></span>
@@ -240,6 +243,56 @@
       </div>
       <p class="spells-hint" id="spells-hint">Tap a spell card to copy (seals the cast). Paste the reply into chat to densen, then Cast Spell for the next true priority.</p>
       <div class="spells-list" id="spells-list"></div>
+    </aside>
+
+    <!-- RIGHT: Experiences panel -->
+    <aside class="experiences-panel" id="experiences-panel" hidden>
+      <header class="experiences-header">
+        <div class="experiences-title-wrap">
+          <button
+            type="button"
+            class="experiences-title-btn"
+            id="btn-experiences-title"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            title="Experience log options"
+            aria-label="Experiences menu"
+          >
+            Experiences
+          </button>
+          <div class="experiences-title-menu" id="experiences-title-menu" role="menu" hidden>
+            <button type="button" class="experiences-title-menu-item" role="menuitem" id="btn-new-experience" data-action="new-experience">
+              New experience
+            </button>
+            <button type="button" class="experiences-title-menu-item" role="menuitem" id="btn-refresh-experiences" data-action="refresh-experiences">
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="experiences-header-actions">
+          <button type="button" class="btn-icon subtle" id="btn-close-experiences" title="Collapse panel" aria-label="Collapse Experiences panel">›</button>
+        </div>
+      </header>
+      <div class="experiences-toolbar" id="experiences-toolbar">
+        <input
+          type="search"
+          id="experience-search"
+          class="experience-search"
+          placeholder="Search experiences…"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Search experiences"
+        />
+        <select id="experience-status-filter" class="experience-status-filter" aria-label="Status filter">
+          <option value="all">All</option>
+          <option value="completed">Completed</option>
+          <option value="ongoing">Ongoing</option>
+          <option value="abandoned">Abandoned</option>
+          <option value="superseded">Superseded</option>
+        </select>
+      </div>
+      <p class="experiences-hint" id="experiences-hint">Operational memory: what happened, what I did, why, how, outcome, lessons.</p>
+      <div class="experiences-list" id="experiences-list"></div>
     </aside>
   </div>
 
@@ -589,8 +642,65 @@
 
   <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+r
+  <!-- Experiences quick-capture overlay (self-contained) -->
+  <div id="experience-overlay" class="experience-overlay" hidden role="dialog" aria-label="Experience Intelligence">
+    <div class="experience-modal">
+      <header class="experience-header">
+        <strong>Experience Intelligence</strong>
+        <button type="button" class="experience-close" id="btn-experience-close" aria-label="Close">×</button>
+      </header>
+      <div class="experience-body">
+        <form id="experience-form" class="experience-form" autocomplete="off">
+          <label>Title <input type="text" id="exp-title" required placeholder="What was this experience?" /></label>
+          <label>Summary <input type="text" id="exp-summary" placeholder="One sentence summary" /></label>
+          <label>What happened <textarea id="exp-what" rows="3" placeholder="The situation, event, or problem"></textarea></label>
+          <label>What I did <textarea id="exp-did" rows="3" placeholder="Actions taken, decisions made"></textarea></label>
+          <label>Why <textarea id="exp-why" rows="2" placeholder="Motivation, context, constraints"></textarea></label>
+          <label>How <textarea id="exp-how" rows="3" placeholder="Process, method, tools, steps"></textarea></label>
+          <label>Outcome <textarea id="exp-outcome" rows="2" placeholder="Result — worked, failed, partial, unexpected"></textarea></label>
+          <label>Lessons <textarea id="exp-lessons" rows="3" placeholder="Distilled learnings, principles extracted"></textarea></label>
+          <label>Tags <input type="text" id="exp-tags" placeholder="Comma-separated tags" /></label>
+          <div class="experience-actions">
+            <button type="button" class="btn-secondary" id="btn-experience-cancel">Cancel</button>
+            <button type="submit" class="btn-primary">Save to vault</button>
+          </div>
+          <p class="experience-foot" id="experience-foot">Save writes to experiences/ and updates EXPERIENCES-INDEX.md.</p>
+        </form>
+      </div>
+    </div>
+  </div>
 
-  <script type="module" src="js/app.js?v=recover-1"></script>
+
+  <!-- Experiences quick-capture overlay (self-contained) -->
+  <div id="experience-overlay" class="experience-overlay" hidden role="dialog" aria-label="Experience Intelligence">
+    <div class="experience-modal">
+      <header class="experience-header">
+        <strong>Experience Intelligence</strong>
+        <button type="button" class="experience-close" id="btn-experience-close" aria-label="Close">×</button>
+      </header>
+      <div class="experience-body">
+        <form id="experience-form" class="experience-form" autocomplete="off">
+          <label>Title <input type="text" id="exp-title" required placeholder="What was this experience?" /></label>
+          <label>Summary <input type="text" id="exp-summary" placeholder="One sentence summary" /></label>
+          <label>What happened <textarea id="exp-what" rows="3" placeholder="The situation, event, or problem"></textarea></label>
+          <label>What I did <textarea id="exp-did" rows="3" placeholder="Actions taken, decisions made"></textarea></label>
+          <label>Why <textarea id="exp-why" rows="2" placeholder="Motivation, context, constraints"></textarea></label>
+          <label>How <textarea id="exp-how" rows="3" placeholder="Process, method, tools, steps"></textarea></label>
+          <label>Outcome <textarea id="exp-outcome" rows="2" placeholder="Result — worked, failed, partial, unexpected"></textarea></label>
+          <label>Lessons <textarea id="exp-lessons" rows="3" placeholder="Distilled learnings, principles extracted"></textarea></label>
+          <label>Tags <input type="text" id="exp-tags" placeholder="Comma-separated tags" /></label>
+          <div class="experience-actions">
+            <button type="button" class="btn-secondary" id="btn-experience-cancel">Cancel</button>
+            <button type="submit" class="btn-primary">Save to vault</button>
+          </div>
+          <p class="experience-foot" id="experience-foot">Save writes to experiences/ and updates EXPERIENCES-INDEX.md.</p>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js?v=experience-layer-1"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -836,5 +946,107 @@
       }, 4000);
     })();
   </script>
+  <!-- Experience overlay wiring (self-contained) -->
+  <script>
+    (function () {
+      const overlay = document.getElementById("experience-overlay");
+      const form = document.getElementById("experience-form");
+      const close = document.getElementById("btn-experience-close");
+      const cancel = document.getElementById("btn-experience-cancel");
+      const foot = document.getElementById("experience-foot");
+
+      function openExperienceOverlay() {
+        if (!overlay || !form) return;
+        overlay.removeAttribute("hidden");
+        overlay.style.display = "flex";
+        overlay.style.zIndex = "11000";
+        const title = document.getElementById("exp-title");
+        if (title) title.focus();
+      }
+
+      function closeExperienceOverlay() {
+        if (!overlay) return;
+        overlay.setAttribute("hidden", "");
+        overlay.style.display = "none";
+        if (form) form.reset();
+        if (foot) foot.textContent = "Save writes to experiences/ and updates EXPERIENCES-INDEX.md.";
+      }
+
+      function toastExperience(msg, isError) {
+        if (foot) {
+          foot.textContent = msg;
+          foot.style.color = isError ? "#f87171" : "#86efac";
+        }
+      }
+
+      async function saveExperience(e) {
+        if (e && e.preventDefault) e.preventDefault();
+        const title = document.getElementById("exp-title").value.trim();
+        if (!title) {
+          toastExperience("Title required", true);
+          return;
+        }
+        const tags = (document.getElementById("exp-tags").value || "")
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+
+        const payload = {
+          id: "exp-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7),
+          type: "experience",
+          title,
+          summary: document.getElementById("exp-summary").value.trim(),
+          what_happened: document.getElementById("exp-what").value.trim(),
+          what_i_did: document.getElementById("exp-did").value.trim(),
+          why: document.getElementById("exp-why").value.trim(),
+          how: document.getElementById("exp-how").value.trim(),
+          outcome: document.getElementById("exp-outcome").value.trim(),
+          lessons: document.getElementById("exp-lessons").value.trim(),
+          tags,
+          related_focuses: [],
+          related_experiences: [],
+          date_range: { start: new Date().toISOString(), end: null },
+          status: "completed",
+          certainty: "uncertain",
+          author: "Jacob",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        try {
+          const dataMod = await import("./js/data.js?v=experience-layer-1");
+          const intelMod = await import("./js/intelligence.js?v=experience-layer-1");
+          const md = dataMod.buildExperienceMarkdown(payload);
+          const parsed = dataMod.parseExperienceMarkdown(md);
+          const titleOk = parsed.title === payload.title;
+          const roundtrip = titleOk ? " ✓ markdown roundtrip" : " ✗ roundtrip mismatch";
+
+          const result = await intelMod.writeExperienceToVault(payload);
+          if (result && result.ok) {
+            toastExperience("Saved to vault · " + (result.method || "ok") + roundtrip, false);
+            if (typeof toast === "function") toast("Experience saved to vault", "", 2500);
+          } else {
+            const err = result && result.error ? result.error : "unknown error";
+            toastExperience("Save failed: " + err, true);
+          }
+        } catch (err) {
+          toastExperience("Error: " + (err && err.message ? err.message : err), true);
+        }
+      }
+
+      if (close) close.addEventListener("click", closeExperienceOverlay);
+      if (cancel) cancel.addEventListener("click", closeExperienceOverlay);
+      if (form) form.addEventListener("submit", saveExperience);
+
+      document.addEventListener("click", function (e) {
+        const btn = e.target.closest("#btn-toggle-experiences");
+        if (btn) openExperienceOverlay();
+      });
+
+      window.__openExperienceOverlay = openExperienceOverlay;
+      window.__closeExperienceOverlay = closeExperienceOverlay;
+    })();
+  </script>
+
 </body>
 </html>

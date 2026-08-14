@@ -411,6 +411,194 @@ export const INTEL_CATEGORIES = Object.freeze([
   "relationship",
 ]);
 
+/** Experience intelligence certainty levels */
+export const EXPERIENCE_CERTAINTY = Object.freeze([
+  "proven",
+  "likely",
+  "uncertain",
+  "hypothesis",
+]);
+
+/** Experience lifecycle statuses */
+export const EXPERIENCE_STATUSES = Object.freeze([
+  "completed",
+  "ongoing",
+  "abandoned",
+  "superseded",
+]);
+
+/** Experience author options */
+export const EXPERIENCE_AUTHORS = Object.freeze(["Jacob", "Cell2"]);
+
+/**
+ * Create an empty experience scaffold with defaults.
+ */
+export function createEmptyExperience(overrides = {}) {
+  const now = new Date().toISOString();
+  return {
+    id: overrides.id || `exp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    type: "experience",
+    title: String(overrides.title || "").trim() || "Untitled experience",
+    summary: String(overrides.summary || "").trim(),
+    what_happened: String(overrides.what_happened || "").trim(),
+    what_i_did: String(overrides.what_i_did || "").trim(),
+    why: String(overrides.why || "").trim(),
+    how: String(overrides.how || "").trim(),
+    outcome: String(overrides.outcome || "").trim(),
+    lessons: String(overrides.lessons || "").trim(),
+    tags: Array.isArray(overrides.tags) ? overrides.tags.filter((t) => typeof t === "string") : [],
+    related_focuses: Array.isArray(overrides.related_focuses) ? overrides.related_focuses.filter((t) => typeof t === "string") : [],
+    related_experiences: Array.isArray(overrides.related_experiences) ? overrides.related_experiences.filter((t) => typeof t === "string") : [],
+    date_range: {
+      start: overrides?.date_range?.start || now,
+      end: overrides?.date_range?.end || null,
+    },
+    status: EXPERIENCE_STATUSES.includes(overrides.status) ? overrides.status : "completed",
+    certainty: EXPERIENCE_CERTAINTY.includes(overrides.certainty) ? overrides.certainty : "uncertain",
+    author: EXPERIENCE_AUTHORS.includes(overrides.author) ? overrides.author : "Jacob",
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+/**
+ * Normalize legacy/partial experience objects.
+ */
+export function normalizeExperience(exp) {
+  if (!exp || typeof exp !== "object") return createEmptyExperience();
+  const base = createEmptyExperience(exp);
+  base.id = String(exp.id || base.id).trim() || base.id;
+  if (!base.title && exp.title) base.title = String(exp.title).trim();
+  if (!base.summary && exp.summary) base.summary = String(exp.summary).trim();
+  if (!base.what_happened && exp.what_happened) base.what_happened = String(exp.what_happened).trim();
+  if (!base.what_i_did && exp.what_i_did) base.what_i_did = String(exp.what_i_did).trim();
+  if (!base.why && exp.why) base.why = String(exp.why).trim();
+  if (!base.how && exp.how) base.how = String(exp.how).trim();
+  if (!base.outcome && exp.outcome) base.outcome = String(exp.outcome).trim();
+  if (!base.lessons && exp.lessons) base.lessons = String(exp.lessons).trim();
+  base.status = EXPERIENCE_STATUSES.includes(exp.status) ? exp.status : base.status;
+  base.certainty = EXPERIENCE_CERTAINTY.includes(exp.certainty) ? exp.certainty : base.certainty;
+  base.author = EXPERIENCE_AUTHORS.includes(exp.author) ? exp.author : base.author;
+  base.updated_at = new Date().toISOString();
+  return base;
+}
+
+/**
+ * Build markdown body for an experience entry.
+ */
+export function buildExperienceMarkdown(exp) {
+  const e = normalizeExperience(exp);
+  const quote = (v) => `"${String(v).replace(/"/g, '\\"')}"`;
+  const joinTags = (arr) => `[${(arr || []).map((t) => quote(t)).join(", ")}]`;
+  const front = [
+    "---",
+    `id: ${quote(e.id)}`,
+    `type: ${quote(e.type || "experience")}`,
+    `title: ${quote(e.title || "Untitled experience")}`,
+    `status: ${quote(e.status || "completed")}`,
+    `certainty: ${quote(e.certainty || "uncertain")}`,
+    `author: ${quote(e.author || "Jacob")}`,
+    `created_at: ${quote(e.created_at || new Date().toISOString())}`,
+    `updated_at: ${quote(e.updated_at || new Date().toISOString())}`,
+    `tags: ${joinTags(e.tags)}`,
+    `related_focuses: ${joinTags(e.related_focuses)}`,
+    `related_experiences: ${joinTags(e.related_experiences)}`,
+    "---",
+    "",
+    `## ${e.title || "Experience"}`,
+    "",
+    e.summary ? `> ${e.summary}` : "",
+    "",
+    "### What happened",
+    "",
+    e.what_happened || "",
+    "",
+    "### What I did",
+    "",
+    e.what_i_did || "",
+    "",
+    "### Why",
+    "",
+    e.why || "",
+    "",
+    "### How",
+    "",
+    e.how || "",
+    "",
+    "### Outcome",
+    "",
+    e.outcome || "",
+    "",
+    "### Lessons",
+    "",
+    e.lessons || "",
+    "",
+    "_Experience Intelligence · DASKW on disk._",
+    "",
+  ]
+    .filter((line, idx, arr) => !(line === "" && (idx === 0 || arr[idx - 1] === "")))
+    .join("\n");
+  return front;
+}
+
+/**
+ * Parse a minimal experience from markdown frontmatter + headings.
+ * Best-effort: returns empty scaffold if parsing fails.
+ */
+export function parseExperienceMarkdown(text) {
+  try {
+    const raw = String(text || "");
+    const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
+    const fm = fmMatch ? fmMatch[1] : "";
+    const body = fmMatch ? raw.slice(fmMatch[0].length).trim() : raw.trim();
+
+    const fmObj = {};
+    for (const line of fm.split("\n")) {
+      const m = line.match(/^([^:]+):\s*(.*)$/);
+      if (!m) continue;
+      const key = m[1].trim();
+      let value = m[2].trim();
+      if (value.startsWith("[") && value.endsWith("]")) {
+        try {
+          value = JSON.parse(value);
+        } catch {
+          value = value.slice(1, -1).split(",").map((s) => s.trim()).filter(Boolean);
+        }
+      } else if (value.startsWith('"') && value.endsWith('"')) {
+        value = value.slice(1, -1);
+      }
+      fmObj[key] = value;
+    }
+
+    const section = (heading) => {
+      const re = new RegExp(`### ${heading}\\n([\\s\\S]*?)(?=\\n### |\\n_Experience Intelligence |$)`, "i");
+      const m = body.match(re);
+      return m ? m[1].trim() : "";
+    };
+
+    return normalizeExperience({
+      id: fmObj.id,
+      title: fmObj.title,
+      status: fmObj.status,
+      certainty: fmObj.certainty,
+      author: fmObj.author,
+      tags: Array.isArray(fmObj.tags) ? fmObj.tags : [],
+      related_focuses: Array.isArray(fmObj.related_focuses) ? fmObj.related_focuses : [],
+      related_experiences: Array.isArray(fmObj.related_experiences) ? fmObj.related_experiences : [],
+      summary: body.match(/^>\s*(.*)$/m)?.[1] || "",
+      what_happened: section("What happened"),
+      what_i_did: section("What I did"),
+      why: section("Why"),
+      how: section("How"),
+      outcome: section("Outcome"),
+      lessons: section("Lessons"),
+    });
+  } catch {
+    return createEmptyExperience();
+  }
+}
+
+
 /**
  * Normalize legacy type values → person | ai | network | …
  * Cell2 Core is type "ai" (system); legacy self-intelligence maps to ai.

@@ -28,6 +28,10 @@ import {
   assertAiGovernance,
   detectForbiddenAiAction,
   isPurgeProtected,
+  createEmptyExperience,
+  normalizeExperience,
+  buildExperienceMarkdown,
+  parseExperienceMarkdown,
 } from "./data.js";
 import { computeFocusHealth } from "./health.js";
 
@@ -54,6 +58,10 @@ export const CELL2_INTEL_FILE = CELL2_INTEL_PATH;
 
 /** Global AI-node index at vault root */
 export const SCROLL_LIST_FILE = "SCROLL-LIST.md";
+/** Experience intelligence index at vault root */
+export const EXPERIENCES_INDEX_FILE = "EXPERIENCES-INDEX.md";
+/** Experience vault folder */
+export const EXPERIENCES_DIR = "experiences";
 
 /** Legacy Cell2 kind map (compat for old callers) → category */
 export const CELL2_KINDS = Object.freeze({
@@ -3692,4 +3700,204 @@ export async function deleteFocusIntelligenceFile(focus) {
       error: String(err),
     };
   }
+}
+
+/**
+ * Experience Intelligence vault layer.
+ *
+ * Reads/writes experience entries under EXPERIENCES_DIR/.
+ * Maintains EXPERIENCES-INDEX.md at vault root.
+ */
+
+/**
+ * Resolve the vault path for an experience entry file.
+ */
+export function experienceVaultPath(expId) {
+  const id = String(expId || "").trim();
+  if (!id) return `${EXPERIENCES_DIR}/unknown.md`;
+  return `${EXPERIENCES_DIR}/${id}.md`;
+}
+
+/**
+ * Read all experience entries from the vault root index + disk.
+ * Returns array of normalized experience objects.
+ */
+export async function readExperiencesFromVault() {
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) return [];
+
+  const entries = [];
+  try {
+    const dir = await handle.getDirectoryHandle(EXPERIENCES_DIR, { create: false });
+    for await (const [name, fileHandle] of dir.entries()) {
+      if (!/\.md$/i.test(name)) continue;
+      try {
+        const text = await readExistingFocusText(fileHandle);
+        const exp = parseExperienceMarkdown(text);
+        if (exp && exp.id) entries.push(exp);
+      } catch {
+        /* skip unreadable file */
+      }
+    }
+  } catch {
+    /* no experiences folder yet */
+  }
+
+  return entries.sort((a, b) => {
+    const at = Date.parse(a.date_range?.start || a.created_at || 0);
+    const bt = Date.parse(b.date_range?.start || b.created_at || 0);
+    return bt - at;
+  });
+}
+
+/**
+ * Read the vault EXPERIENCES-INDEX.md manifest.
+ * Returns plain text or null when absent.
+ */
+export async function readExperiencesIndexText() {
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) return null;
+  try {
+    const fileHandle = await handle.getFileHandle(EXPERIENCES_INDEX_FILE, { create: false });
+    return await readExistingFocusText(fileHandle);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write/update a single experience entry to vault disk.
+ * Also refreshes the root index file.
+ */
+export async function writeExperienceToVault(exp, opts = {}) {
+  const e = normalizeExperience(exp);
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) {
+    const allowDownload = opts.allowDownload !== false;
+    if (allowDownload) {
+      downloadMarkdown(experienceVaultPath(e.id), buildExperienceMarkdown(e));
+      return { ok: true, method: "download", id: e.id };
+    }
+    return { ok: false, method: "no-folder", id: e.id };
+  }
+
+  try {
+    const dir = await handle.getDirectoryHandle(EXPERIENCES_DIR, { create: true });
+    const filePath = experienceVaultPath(e.id);
+    const fileName = filePath.split("/").pop();
+    const fileHandle = await dir.getFileHandle(fileName, { create: true });
+    const content = buildExperienceMarkdown(e);
+    const current = await readExistingFocusText(fileHandle).catch(() => null);
+    if (current === content) {
+      return { ok: true, method: "filesystem", id: e.id, skipped: true };
+    }
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+    await refreshExperiencesIndex(handle, [e]);
+    return { ok: true, method: "filesystem", id: e.id };
+  } catch (err) {
+    console.warn("Experience write failed", err);
+    return { ok: false, method: "error", id: e.id, error: String(err) };
+  }
+}
+
+/**
+ * Refresh root EXPERIENCES-INDEX.md as a concise manifest.
+ */
+async function refreshExperiencesIndex(handle, experiences = []) {
+  if (!handle || !hasDirectoryPicker()) return;
+  try {
+    const lines = [
+      "# Experiences Index",
+      "",
+      "_DASKW manifest — rebuilt on every experience write._",
+      "",
+      `Updated: ${new Date().toISOString()}`,
+      "",
+    ];
+    const sorted = experiences.sort((a, b) => {
+      const at = Date.parse(a.date_range?.start || a.created_at || 0);
+      const bt = Date.parse(b.date_range?.start || b.created_at || 0);
+      return bt - at;
+    });
+    for (const e of sorted) {
+      lines.push(`- ${e.id} · ${e.title || "Untitled"} · ${e.status} · ${e.certainty}`);
+    }
+    const content = lines.join("\n") + "\n";
+    const root = handle;
+    const fileHandle = await root.getFileHandle(EXPERIENCES_INDEX_FILE, { create: true });
+    const current = await readExistingFocusText(fileHandle).catch(() => null);
+    if (current === content) return;
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/**
+ * Record an experience intelligence event to vault.
+ * Appends a structured entry into experiences/ and refreshes index.
+ */
+export async function recordExperienceIntelligence(exp) {
+  const e = createEmptyExperience(exp);
+  return writeExperienceToVault(e);
+}
+
+/**
+ * Search experiences by keyword across id, title, summary, lessons, tags.
+ */
+export function searchExperiences(experiences, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return experiences || [];
+  return (experiences || []).filter((e) => {
+    const hay = [
+      e.id,
+      e.title,
+      e.summary,
+      e.what_happened,
+      e.what_i_did,
+      e.why,
+      e.how,
+      e.outcome,
+      e.lessons,
+      ...(Array.isArray(e.tags) ? e.tags : []),
+      ...(Array.isArray(e.related_focuses) ? e.related_focuses : []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+/**
+ * Link experiences to a Focus by id or name.
+ */
+export function linkExperiencesToFocus(experiences, focusId, focusName = "") {
+  const id = String(focusId || "").trim().toLowerCase();
+  const name = String(focusName || "").trim().toLowerCase();
+  if (!id && !name) return experiences || [];
+  return (experiences || []).map((e) => {
+    const related = Array.isArray(e.related_focuses) ? [...e.related_focuses] : [];
+    if (!related.includes(focusId)) related.push(focusId);
+    return { ...e, related_focuses: related };
+  });
+}
+
+/**
+ * Append an experience reference into a Focus's intelligence log.
+ * This does not duplicate the full experience body — it references it.
+ */
+export async function appendExperienceReferenceToFocus(focus, exp) {
+  const e = normalizeExperience(exp);
+  return appendEntityIntelligence(focus, {
+    body: `Experience reference: ${e.title || e.id} · ${experienceVaultPath(e.id)}`,
+    source: "Cell2",
+    category: "node_intel",
+    certainty: e.certainty || ensureCertainty(focus),
+    tags: ["experience", ...(Array.isArray(e.tags) ? e.tags.slice(0, 3) : [])],
+  });
 }
