@@ -5,13 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/jpeg" href="assets/grimoire-icon.jpg" />
   <title>Grimoire — Constellation Codex</title>
+  <!-- Inline paint so Opera GX / blocked Google Fonts cannot leave a blank tab -->
+  <style>
+    html, body { height: 100%; margin: 0; background: #05050a; color: #e8ecff; }
+    #grimoire-boot {
+      position: fixed; inset: 0; z-index: 2147483646;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 0.75rem; background: #05050a;
+      font-family: system-ui, "Segoe UI", sans-serif; color: #c8c6e8;
+      text-align: center; padding: 1.5rem;
+    }
+    #grimoire-boot[data-ready="1"] { display: none !important; }
+    #grimoire-boot .boot-title {
+      font-size: 1.15rem; letter-spacing: 0.14em; text-transform: uppercase; color: #e8ecff;
+    }
+    #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
+  </style>
+  <link rel="stylesheet" href="css/styles.css?v=boot-20260823" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/styles.css?v=experience-layer-1" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'" />
 </head>
 <body>
-  <!-- WORLD: full-viewport universe canvas (z-index 0; .app is transparent over it) -->
+  <div id="grimoire-boot" role="status" aria-live="polite">
+    <div class="boot-title">Grimoire</div>
+    <div class="boot-sub" id="grimoire-boot-sub">Loading Constellation Codex…</div>
+  </div>
+  <noscript>
+    <p style="position:fixed;inset:auto 1rem 1rem;color:#f0d78c;font-family:system-ui,sans-serif;z-index:2147483647;">
+      Grimoire needs JavaScript. Enable it, then open
+      https://saint-chevalier.github.io/GRIMOIRE/
+    </p>
+  </noscript>
+  <!-- WORLD: full-viewport universe canvas (behind .app; .app is transparent over it) -->
   <canvas id="universe-canvas" class="universe-canvas" aria-hidden="true"></canvas>
   <!-- Legacy star DOM kept empty for compatibility; canvas is the world -->
   <div id="stars-canvas" class="stars-canvas" aria-hidden="true" hidden>
@@ -642,35 +668,6 @@
 
   <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-r
-  <!-- Experiences quick-capture overlay (self-contained) -->
-  <div id="experience-overlay" class="experience-overlay" hidden role="dialog" aria-label="Experience Intelligence">
-    <div class="experience-modal">
-      <header class="experience-header">
-        <strong>Experience Intelligence</strong>
-        <button type="button" class="experience-close" id="btn-experience-close" aria-label="Close">×</button>
-      </header>
-      <div class="experience-body">
-        <form id="experience-form" class="experience-form" autocomplete="off">
-          <label>Title <input type="text" id="exp-title" required placeholder="What was this experience?" /></label>
-          <label>Summary <input type="text" id="exp-summary" placeholder="One sentence summary" /></label>
-          <label>What happened <textarea id="exp-what" rows="3" placeholder="The situation, event, or problem"></textarea></label>
-          <label>What I did <textarea id="exp-did" rows="3" placeholder="Actions taken, decisions made"></textarea></label>
-          <label>Why <textarea id="exp-why" rows="2" placeholder="Motivation, context, constraints"></textarea></label>
-          <label>How <textarea id="exp-how" rows="3" placeholder="Process, method, tools, steps"></textarea></label>
-          <label>Outcome <textarea id="exp-outcome" rows="2" placeholder="Result — worked, failed, partial, unexpected"></textarea></label>
-          <label>Lessons <textarea id="exp-lessons" rows="3" placeholder="Distilled learnings, principles extracted"></textarea></label>
-          <label>Tags <input type="text" id="exp-tags" placeholder="Comma-separated tags" /></label>
-          <div class="experience-actions">
-            <button type="button" class="btn-secondary" id="btn-experience-cancel">Cancel</button>
-            <button type="submit" class="btn-primary">Save to vault</button>
-          </div>
-          <p class="experience-foot" id="experience-foot">Save writes to experiences/ and updates EXPERIENCES-INDEX.md.</p>
-        </form>
-      </div>
-    </div>
-  </div>
-
 
   <!-- Experiences quick-capture overlay (self-contained) -->
   <div id="experience-overlay" class="experience-overlay" hidden role="dialog" aria-label="Experience Intelligence">
@@ -700,7 +697,7 @@ r
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=experience-layer-1"></script>
+  <script type="module" src="js/app.js?v=boot-20260823"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -708,6 +705,26 @@ r
   <script>
     (function () {
       var STORAGE_KEY = "grimoire-mvp-v1";
+
+      function hideBootSplash() {
+        var el = document.getElementById("grimoire-boot");
+        if (el) el.setAttribute("data-ready", "1");
+      }
+      function showBootFailure(html) {
+        var el = document.getElementById("grimoire-boot");
+        var sub = document.getElementById("grimoire-boot-sub");
+        if (el) {
+          el.removeAttribute("data-ready");
+          el.style.display = "flex";
+        }
+        if (sub) sub.innerHTML = html;
+      }
+      var readyPoll = setInterval(function () {
+        if (window.__grimoireAppReady) {
+          clearInterval(readyPoll);
+          hideBootSplash();
+        }
+      }, 50);
 
       function readState() {
         try {
@@ -931,10 +948,16 @@ r
         var list = document.getElementById("convo-list");
         if (list && !list.querySelector(".convo-item")) paintSidebarEmergency();
       }, 2500);
-      // If still not ready after 4s, hard-hint hard refresh (stale module cache)
+      // If still not ready after 4s, show a visible overlay (not a silent black hole)
       setTimeout(function () {
         if (window.__grimoireAppReady) return;
         console.error("[grimoire] module failed to boot — hard refresh (Ctrl+Shift+R)");
+        showBootFailure(
+          "<strong>Grimoire did not finish loading.</strong><br>" +
+            "Press <strong>Ctrl+Shift+R</strong> to hard-refresh and clear stale cache.<br>" +
+            "Use this exact URL: <strong>https://saint-chevalier.github.io/GRIMOIRE/</strong><br>" +
+            "If it stays blank, open DevTools → Console and look for a red error."
+        );
         var empty = document.getElementById("empty-state");
         if (empty) {
           empty.innerHTML =
@@ -1014,8 +1037,8 @@ r
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=experience-layer-1");
-          const intelMod = await import("./js/intelligence.js?v=experience-layer-1");
+          const dataMod = await import("./js/data.js?v=boot-20260823");
+          const intelMod = await import("./js/intelligence.js?v=boot-20260823");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1079,7 +1102,7 @@ r
 
       async function renderIntelAudit() {
         try {
-          const intelMod = await import("./js/intelligence.js?v=experience-layer-1");
+          const intelMod = await import("./js/intelligence.js?v=boot-20260823");
           const audit = await intelMod.auditVaultIntelligence();
           
           // Overview tab

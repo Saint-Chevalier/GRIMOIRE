@@ -138,13 +138,13 @@ import {
   evaluateSpellUpgrade,
   applySpellUpgrade,
   buildSpellCrafterContext,
-} from "./data.js?v=session0-fleet-1";
+} from "./data.js?v=boot-20260823";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=session0-fleet-1";
+} from "./stars.js?v=boot-20260823";
 import {
   initUniverse,
   setFocusUniverse,
@@ -152,7 +152,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=session0-fleet-1";
+} from "./universe.js?v=boot-20260823";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -219,19 +219,19 @@ import {
   detectExperienceFromText,
   autoCaptureEntitiesFromText,
   autoCaptureNodeIntelFromText,
-} from "./intelligence.js?v=focus-hygiene-2";
+} from "./intelligence.js?v=boot-20260823";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=session0-fleet-1";
+} from "./health.js?v=boot-20260823";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js";
+} from "./pulse.js?v=boot-20260823";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -10477,7 +10477,13 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "session0-fleet-1";
+window.__grimoireBootVersion = "boot-20260823";
+try {
+  const boot = document.getElementById("grimoire-boot");
+  if (boot) boot.setAttribute("data-ready", "1");
+} catch {
+  /* ignore */
+}
 
 /** Guard against double-submit from capture + onclick + form */
 let _newFocusCreating = false;
