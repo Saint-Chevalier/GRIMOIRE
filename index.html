@@ -21,10 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=boot-20260823" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'" />
+  <link rel="stylesheet" href="css/styles.css?v=boot-20260823b" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=boot-20260823b" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -697,7 +695,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=boot-20260823"></script>
+  <script type="module" src="js/app.js?v=boot-20260823b"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1037,8 +1035,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=boot-20260823");
-          const intelMod = await import("./js/intelligence.js?v=boot-20260823");
+          const dataMod = await import("./js/data.js?v=boot-20260823b");
+          const intelMod = await import("./js/intelligence.js?v=boot-20260823b");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1102,7 +1100,7 @@
 
       async function renderIntelAudit() {
         try {
-          const intelMod = await import("./js/intelligence.js?v=boot-20260823");
+          const intelMod = await import("./js/intelligence.js?v=boot-20260823b");
           const audit = await intelMod.auditVaultIntelligence();
           
           // Overview tab

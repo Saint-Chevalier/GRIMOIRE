@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-store" />
+  <title>Opening Grimoire…</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #05050a;
+      color: #e8ecff;
+      font-family: system-ui, "Segoe UI", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    p { letter-spacing: 0.08em; }
+  </style>
+  <script>
+    location.replace("./index.html?open=" + Date.now());
+  </script>
+</head>
+<body>
+  <p>Opening the book…</p>
+</body>
+</html>
