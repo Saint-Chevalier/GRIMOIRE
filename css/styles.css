@@ -6371,6 +6371,85 @@ button.session0-send.is-fleet-node {
   font-size: 11px;
   color: #64748b;
 }
+.intel-audit-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.intel-audit-panel.is-minimized .intel-audit-toolbar,
+.intel-audit-panel.is-minimized .intel-audit-content {
+  display: none !important;
+}
+.intel-audit-panel.is-minimized {
+  width: 280px;
+  min-width: 220px;
+}
+.intel-audit-error {
+  padding: 12px;
+  color: #fca5a5;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.intel-audit-debug {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(248,113,113,0.25);
+  border-radius: 6px;
+  color: #cbd5e1;
+  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.entity-retired-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fca5a5;
+  background: rgba(248,113,113,0.12);
+  border: 1px solid rgba(248,113,113,0.35);
+}
+.entity-detail {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(167,139,250,0.25);
+  border-radius: 8px;
+  background: rgba(12,10,24,0.7);
+}
+.entity-detail-title {
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+}
+.btn-retire-entity {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(248,113,113,0.45);
+  background: rgba(248,113,113,0.12);
+  color: #fecaca;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-retire-entity:hover {
+  background: rgba(248,113,113,0.22);
+}
+.btn-retire-entity:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.experience-item.is-selected {
+  outline: 1px solid rgba(167,139,250,0.45);
+}
+.experience-item {
+  cursor: pointer;
+}
 
 /* Spell Crafter badges */
 .spell-face-tier {

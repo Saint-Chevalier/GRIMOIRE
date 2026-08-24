@@ -90,6 +90,9 @@ import {
   formatSession0MessagePacket,
   SESSION0_NAME,
   isSession0,
+  isRetiredAiNode,
+  isRetiredEntity,
+  RETIRED_AI_NODES,
   normalizeLinkedSessionLabel,
   resolveSpellLinkedSession,
   spellSendTargetLabel,
@@ -138,13 +141,13 @@ import {
   evaluateSpellUpgrade,
   applySpellUpgrade,
   buildSpellCrafterContext,
-} from "./data.js?v=boot-20260823b";
+} from "./data.js?v=exec-001";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=boot-20260823b";
+} from "./stars.js?v=exec-001";
 import {
   initUniverse,
   setFocusUniverse,
@@ -152,7 +155,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=boot-20260823b";
+} from "./universe.js?v=exec-001";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -219,19 +222,19 @@ import {
   detectExperienceFromText,
   autoCaptureEntitiesFromText,
   autoCaptureNodeIntelFromText,
-} from "./intelligence.js?v=boot-20260823b";
+} from "./intelligence.js?v=exec-001";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=boot-20260823b";
+} from "./health.js?v=exec-001";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=boot-20260823b";
+} from "./pulse.js?v=exec-001";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -6483,19 +6486,26 @@ function sendMessage(text) {
     ts: Date.now(),
   });
   // Auto-capture experience intelligence from user turn
-  void autoCaptureExperienceFromText(userText, {
-    focusId: convo.id,
-    focusName: convo.name,
-  });
-  // Auto-capture entity + node intel from user turn
-  void autoCaptureEntitiesFromText(userText, {
-    focusId: convo.id,
-    focusName: convo.name,
-  });
-  void autoCaptureNodeIntelFromText(userText, {
-    focusId: convo.id,
-    focusName: convo.name,
-  });
+  const skipRetiredCapture =
+    isRetiredAiNode(convo.name) ||
+    isRetiredAiNode(convo.linkedSession) ||
+    isRetiredEntity(convo);
+  if (!skipRetiredCapture) {
+    void autoCaptureExperienceFromText(userText, {
+      focusId: convo.id,
+      focusName: convo.name,
+    });
+    void autoCaptureEntitiesFromText(userText, {
+      focusId: convo.id,
+      focusName: convo.name,
+    });
+    void autoCaptureNodeIntelFromText(userText, {
+      focusId: convo.id,
+      focusName: convo.name,
+    });
+  } else {
+    console.debug("[auto-capture] skipped — retired node", convo.name || convo.id);
+  }
   touchFocus(convo);
 
   // Chat relay: when ON for this Focus, also copy outbound message for Hermes paste.
@@ -8026,8 +8036,82 @@ function grimoireReply(convo, userText) {
  * 3) alignmentRevealed → engineer from parsed capabilities/constraints/frames
  * Spells render in Spells panel only.
  */
+/**
+ * Remove or archive active spells that target retired AI nodes.
+ * Execution Directive 001 · item 3.
+ * @returns {number} purged count
+ */
+function purgeRetiredNodeSpells() {
+  if (!Array.isArray(state.spells) || !state.spells.length) return 0;
+  let purged = 0;
+  const now = Date.now();
+  for (const spell of state.spells) {
+    if (!spell) continue;
+    const target = String(spell.target || "").trim();
+    const linked = String(spell.linkedSession || "").trim();
+    const convo =
+      (state.conversations || []).find((c) => c.id === spell.conversationId) || null;
+    const retired =
+      (target && isRetiredAiNode(target)) ||
+      (linked && isRetiredAiNode(linked)) ||
+      (convo &&
+        (isRetiredAiNode(convo.name) ||
+          isRetiredAiNode(convo.linkedSession) ||
+          isRetiredEntity(convo)));
+    if (!retired) continue;
+    if (String(spell.status || "").toLowerCase() === "archived") continue;
+    spell.status = "archived";
+    spell.retiredPurgedAt = now;
+    spell.retiredPurgeReason = "retired AI node";
+    purged += 1;
+  }
+  if (purged > 0) {
+    try {
+      persist();
+    } catch {
+      /* ignore */
+    }
+    try {
+      toast(
+        `Purged ${purged} spell${purged === 1 ? "" : "s"} for retired nodes`,
+        "success"
+      );
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (typeof pushBusActivity === "function") {
+        pushBusActivity({
+          type: "retired-node-purge",
+          summary: `Purged ${purged} active spell${purged === 1 ? "" : "s"} targeting retired nodes.`,
+          time: new Date(now).toISOString(),
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    console.debug("[retired-purge]", { purged, nodes: RETIRED_AI_NODES || ["Session0"] });
+  }
+  return purged;
+}
+window.purgeRetiredNodeSpells = purgeRetiredNodeSpells;
+
 function generateAndStoreSpell(convo, userText = "", { silentToast = false } = {}) {
   if (!convo) return null;
+  const convoName = String(convo.name || "").trim();
+  const convoLinked = String(convo.linkedSession || "").trim();
+  if (convoName && isRetiredAiNode(convoName)) {
+    return { blocked: true, reason: `${convoName} is retired. No new spells.` };
+  }
+  if (convoLinked && isRetiredAiNode(convoLinked)) {
+    return {
+      blocked: true,
+      reason: `Linked session ${convoLinked} is retired. Re-link to an active node before casting.`,
+    };
+  }
+  if (isRetiredEntity(convo)) {
+    return { blocked: true, reason: `${convoName || "Entity"} is retired. No new spells.` };
+  }
   // SELF-CAST injects an existing spell — do not mint an echo card
   if (selfCastInFlight) return null;
   const medium = syncMediumFromControls(convo);
@@ -9933,6 +10017,9 @@ function toggleAtlas() {
 function consolidateAndRestructureSpells(convo) {
   if (!convo) return { spell: null, purged: 0, atlas: null };
 
+  // Purge spells targeting retired AI nodes before re-forging
+  const retiredPurged = purgeRetiredNodeSpells();
+
   const source =
     convo.alignmentNotes ||
     [...(convo.messages || [])]
@@ -10477,7 +10564,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "boot-20260823b";
+window.__grimoireBootVersion = "exec-001";
 try {
   const boot = document.getElementById("grimoire-boot");
   if (boot) boot.setAttribute("data-ready", "1");

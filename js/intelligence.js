@@ -32,6 +32,11 @@ import {
   normalizeExperience,
   buildExperienceMarkdown,
   parseExperienceMarkdown,
+  normalizeEntity,
+  buildEntityMarkdown,
+  parseEntityMarkdown,
+  isRetiredAiNode,
+  isRetiredEntity,
 } from "./data.js";
 import { computeFocusHealth } from "./health.js";
 
@@ -3995,10 +4000,50 @@ export async function autoCaptureExperienceFromText(text, opts = {}) {
  * Comprehensive vault audit: read all captured intelligence types.
  * Returns structured summary for the audit panel.
  */
+const VAULT_AUDIT_TIMEOUT_MS = 4000;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`[vault] ${label} timed out after ${ms}ms`)),
+      ms
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export async function auditVaultIntelligence(opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : VAULT_AUDIT_TIMEOUT_MS;
+  const started = Date.now();
+  console.debug("[vault-audit] start", {
+    picker: hasDirectoryPicker(),
+    hasDirHandle: Boolean(dirHandle),
+    timeoutMs,
+  });
+
   const handle = dirHandle || (await restoreIntelligenceFolder());
   if (!handle || !hasDirectoryPicker()) {
-    return { ok: false, error: "no vault linked" };
+    const error = !hasDirectoryPicker()
+      ? "File System Access API unavailable in this browser"
+      : "no vault linked — click 📁 to link GRIMOIRE-FocusIntelligence";
+    console.debug("[vault-audit] abort", { error, ms: Date.now() - started });
+    return {
+      ok: false,
+      error,
+      debug: {
+        picker: hasDirectoryPicker(),
+        hasDirHandle: Boolean(dirHandle),
+        expectedPath: "D:\\GRIMOIRE\\GRIMOIRE-FocusIntelligence\\",
+        elapsedMs: Date.now() - started,
+      },
+      focuses: [],
+      entities: [],
+      experiences: [],
+      scrollNodes: [],
+      busActivity: [],
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   const result = {
@@ -4010,34 +4055,47 @@ export async function auditVaultIntelligence(opts = {}) {
     scrollNodes: [],
     busActivity: [],
     generatedAt: new Date().toISOString(),
+    debug: {
+      picker: true,
+      vault: handle.name,
+      expectedPath: "D:\\GRIMOIRE\\GRIMOIRE-FocusIntelligence\\",
+    },
   };
 
   try {
-    // 1. Read top-level entities (focuses)
-    for await (const [name, entry] of handle.entries()) {
-      if (name === "experiences" || name === "entities" || name === "README.md" || name.startsWith(".")) continue;
-      if (entry.kind === "directory") {
-        result.focuses.push({
-          id: name,
-          name,
-          path: `${name}/`,
-        });
-      }
-    }
+    await withTimeout(
+      (async () => {
+        for await (const [name, entry] of handle.entries()) {
+          if (name === "experiences" || name === "entities" || name === "README.md" || name.startsWith(".")) continue;
+          if (entry.kind === "directory") {
+            result.focuses.push({
+              id: name,
+              name,
+              path: `${name}/`,
+            });
+          }
+        }
 
-    // 2. Read entities
-    result.entities = await readAllEntitiesFromVault();
-
-    // 3. Read experiences
-    result.experiences = await readExperiencesFromVault();
-
-    // 4. Read bus activity from memory
-    result.busActivity = getBusActivityLog().slice(-20);
-
-    // 5. Build scroll nodes from conversations
-    result.scrollNodes = buildScrollNodesFromConversations();
+        result.entities = await readAllEntitiesFromVault();
+        result.experiences = await readExperiencesFromVault();
+        result.busActivity = getBusActivityLog().slice(-20);
+        result.scrollNodes = buildScrollNodesFromConversations();
+      })(),
+      timeoutMs,
+      "auditVaultIntelligence"
+    );
+    result.debug.elapsedMs = Date.now() - started;
+    console.debug("[vault-audit] ok", {
+      focuses: result.focuses.length,
+      entities: result.entities.length,
+      experiences: result.experiences.length,
+      elapsedMs: result.debug.elapsedMs,
+    });
   } catch (err) {
-    result.error = String(err);
+    result.ok = false;
+    result.error = String(err?.message || err);
+    result.debug.elapsedMs = Date.now() - started;
+    console.warn("[vault-audit] failed", result.error, result.debug);
   }
 
   return result;
@@ -4106,7 +4164,7 @@ export function entityVaultPath(entityId) {
  * Returns { ok, method, path } or { ok: false, error }.
  */
 export async function writeEntityToVault(entity) {
-  const e = normalizeEntity?.(entity) || entity;
+  const e = normalizeEntity(entity);
   const handle = dirHandle || (await restoreIntelligenceFolder());
   if (!handle || !hasDirectoryPicker()) {
     return { ok: false, error: "no vault linked" };
@@ -4122,7 +4180,7 @@ export async function writeEntityToVault(entity) {
   try {
     const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
     const w = await fh.createWritable();
-    const md = typeof buildEntityMarkdown === "function" ? buildEntityMarkdown(e) : String(e);
+    const md = buildEntityMarkdown(e);
     await w.write(md);
     await w.close();
     return { ok: true, method: "file-system", path };
@@ -4156,6 +4214,33 @@ export async function readAllEntitiesFromVault() {
   }
 
   return entries.sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
+}
+
+/**
+ * Mark an AI-node entity retired and persist to vault.
+ * Execution Directive 001 · item 4.
+ */
+export async function retireEntityInVault(entityId, { reason = "" } = {}) {
+  const id = String(entityId || "").trim();
+  if (!id) return { ok: false, error: "entity id required" };
+  const all = await readAllEntitiesFromVault();
+  const ent = all.find((e) => e.id === id);
+  if (!ent) return { ok: false, error: "entity not found in vault" };
+  const type = String(ent.type || "").toLowerCase();
+  if (type !== "ai_node" && type !== "ai") {
+    return { ok: false, error: "only AI node entities can be retired from this control" };
+  }
+  ent.status = "retired";
+  ent.updated_at = new Date().toISOString();
+  ent.facts = ent.facts || {};
+  ent.facts.operational = {
+    ...(ent.facts.operational || {}),
+    retired: "true",
+    retired_at: ent.updated_at,
+  };
+  if (reason) ent.facts.operational.retired_reason = String(reason).slice(0, 240);
+  console.debug("[retire-entity]", { id: ent.id, name: ent.name });
+  return writeEntityToVault(ent);
 }
 
 /**
@@ -4236,8 +4321,32 @@ export async function autoCaptureEntitiesFromText(text, opts = {}) {
   const candidates = detectEntitiesFromText(text, focusId, focusName);
   if (!candidates.length) return { captured: 0, entities: [] };
 
+  let existing = [];
+  try {
+    existing = await readAllEntitiesFromVault();
+  } catch (err) {
+    console.debug("[auto-capture] existing entity read failed", err);
+  }
+  const retiredIds = new Set(
+    existing
+      .filter((e) => isRetiredEntity(e) || isRetiredAiNode(e?.name))
+      .flatMap((e) => [String(e.id || "").toLowerCase(), String(e.name || "").toLowerCase()])
+      .filter(Boolean)
+  );
+
   const captured = [];
   for (const ent of candidates) {
+    const nameKey = String(ent.name || "").trim().toLowerCase();
+    const idKey = String(ent.id || "").trim().toLowerCase();
+    if (
+      isRetiredEntity(ent) ||
+      isRetiredAiNode(ent.name) ||
+      (nameKey && retiredIds.has(nameKey)) ||
+      (idKey && retiredIds.has(idKey))
+    ) {
+      console.debug("[auto-capture] skip retired entity", ent.name || ent.id);
+      continue;
+    }
     const result = await writeEntityToVault({
       ...ent,
       related_focuses: focusId ? [focusId] : [],
@@ -4321,6 +4430,10 @@ export async function autoCaptureNodeIntelFromText(text, opts = {}) {
 
   const captured = [];
   for (const node of candidates) {
+    if (isRetiredAiNode(node.name) || isRetiredEntity(node)) {
+      console.debug("[auto-capture] skip retired node intel", node.name);
+      continue;
+    }
     const result = await writeEntityToVault({
       ...node,
       related_focuses: focusId ? [focusId] : [],

@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=boot-20260823b" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=boot-20260823b" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-001" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-001" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -286,7 +286,8 @@
           </button>
         </div>
         <div class="intel-audit-header-actions">
-          <button type="button" class="btn-icon subtle" id="btn-close-intel-audit" title="Collapse panel" aria-label="Collapse Intelligence audit panel">›</button>
+          <button type="button" class="btn-icon subtle" id="btn-minimize-intel-audit" title="Minimize Intelligence Audit" aria-label="Minimize Intelligence Audit" aria-pressed="false">–</button>
+          <button type="button" class="btn-icon subtle" id="btn-close-intel-audit" title="Close Intelligence Audit" aria-label="Close Intelligence Audit">×</button>
         </div>
       </header>
       <div class="intel-audit-toolbar" id="intel-audit-toolbar">
@@ -695,7 +696,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=boot-20260823b"></script>
+  <script type="module" src="js/app.js?v=exec-001"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1035,8 +1036,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=boot-20260823b");
-          const intelMod = await import("./js/intelligence.js?v=boot-20260823b");
+          const dataMod = await import("./js/data.js?v=exec-001");
+          const intelMod = await import("./js/intelligence.js?v=exec-001");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1069,6 +1070,7 @@
             if (hidden) {
               panel.removeAttribute("hidden");
               if (spellsPanel) spellsPanel.setAttribute("hidden", "");
+              applyAuditMinimized(restoreAuditMinimized());
               renderIntelAudit();
             } else {
               panel.setAttribute("hidden", "");
@@ -1080,12 +1082,45 @@
       window.__openExperienceOverlay = openExperienceOverlay;
       window.__closeExperienceOverlay = closeExperienceOverlay;
 
+      const AUDIT_MINIMIZE_KEY = "grimoire-intel-audit-minimized-v1";
+      const AUDIT_UI_TIMEOUT_MS = 5000;
+
+      function applyAuditMinimized(minimized) {
+        const panel = document.getElementById("intel-audit-panel");
+        const btn = document.getElementById("btn-minimize-intel-audit");
+        if (!panel) return;
+        panel.classList.toggle("is-minimized", Boolean(minimized));
+        if (btn) {
+          btn.textContent = minimized ? "▢" : "–";
+          btn.setAttribute("aria-pressed", minimized ? "true" : "false");
+          btn.title = minimized ? "Expand Intelligence Audit" : "Minimize Intelligence Audit";
+          btn.setAttribute("aria-label", btn.title);
+        }
+        try {
+          sessionStorage.setItem(AUDIT_MINIMIZE_KEY, minimized ? "1" : "0");
+        } catch (_) {}
+      }
+
+      function restoreAuditMinimized() {
+        try {
+          return sessionStorage.getItem(AUDIT_MINIMIZE_KEY) === "1";
+        } catch (_) {
+          return false;
+        }
+      }
+
       function switchAuditTab(tabName) {
-        document.querySelectorAll(".intel-audit-tab-panel").forEach(p => p.hidden = true);
+        document.querySelectorAll(".intel-audit-tab-panel").forEach((p) => {
+          p.hidden = true;
+          p.classList.remove("active");
+        });
         document.querySelectorAll(".intel-audit-tab").forEach(t => t.classList.remove("active"));
         const panel = document.getElementById("panel-audit-" + tabName);
         const tabBtn = document.getElementById("tab-audit-" + tabName);
-        if (panel) panel.hidden = false;
+        if (panel) {
+          panel.hidden = false;
+          panel.classList.add("active");
+        }
         if (tabBtn) tabBtn.classList.add("active");
       }
 
@@ -1093,20 +1128,84 @@
         btn.addEventListener("click", () => switchAuditTab(btn.dataset.tab));
       });
 
+      document.getElementById("btn-minimize-intel-audit")?.addEventListener("click", () => {
+        const panel = document.getElementById("intel-audit-panel");
+        const next = !panel?.classList.contains("is-minimized");
+        applyAuditMinimized(next);
+      });
+
       document.getElementById("btn-close-intel-audit")?.addEventListener("click", () => {
         const panel = document.getElementById("intel-audit-panel");
         if (panel) panel.setAttribute("hidden", "");
       });
 
+      applyAuditMinimized(restoreAuditMinimized());
+
+      function auditErrorHtml(title, err, debug) {
+        const dbg = debug ? JSON.stringify(debug, null, 2) : String(err || "");
+        return (
+          '<div class="intel-audit-error"><strong>' +
+          String(title || "Vault read failed") +
+          "</strong><div>" +
+          String(err || "unknown error") +
+          '</div><pre class="intel-audit-debug">' +
+          String(dbg).replace(/</g, "&lt;") +
+          "</pre></div>"
+        );
+      }
+
+      function withUiTimeout(promise, ms, label) {
+        return Promise.race([
+          promise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(label + " timed out after " + ms + "ms")), ms)
+          ),
+        ]);
+      }
+
+      let selectedEntityId = null;
+
+      function isAiNodeEntity(ent) {
+        const t = String(ent?.type || "").toLowerCase();
+        return t === "ai_node" || t === "ai";
+      }
+
+      function isRetiredStatus(ent) {
+        return String(ent?.status || "").toLowerCase() === "retired";
+      }
+
       async function renderIntelAudit() {
+        const overview = document.getElementById("panel-audit-overview");
+        if (overview) {
+          overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
+        }
         try {
-          const intelMod = await import("./js/intelligence.js?v=boot-20260823b");
-          const audit = await intelMod.auditVaultIntelligence();
+          const intelMod = await import("./js/intelligence.js?v=exec-001");
+          const audit = Object.assign(
+            {
+              focuses: [],
+              entities: [],
+              experiences: [],
+              scrollNodes: [],
+              busActivity: [],
+            },
+            await withUiTimeout(
+              intelMod.auditVaultIntelligence({ timeoutMs: 4000 }),
+              AUDIT_UI_TIMEOUT_MS,
+              "Vault overview"
+            )
+          );
           
           // Overview tab
-          const overview = document.getElementById("panel-audit-overview");
-          if (overview && audit.ok) {
-            overview.innerHTML = `
+          if (overview) {
+            if (!audit || audit.ok === false) {
+              overview.innerHTML = auditErrorHtml(
+                "Vault overview unavailable",
+                audit && audit.error ? audit.error : "unknown error",
+                audit && audit.debug
+              );
+            } else {
+              overview.innerHTML = `
               <div class="intel-audit-section">
                 <div class="intel-audit-section-title">Vault: ${audit.vault}</div>
                 <div class="intel-audit-metrics">
@@ -1119,6 +1218,7 @@
                 <div class="intel-audit-meta">Generated: ${new Date(audit.generatedAt).toLocaleString()}</div>
               </div>
             `;
+            }
           }
 
           // Experiences tab
@@ -1171,18 +1271,72 @@
           // Entities tab
           const entityList = document.getElementById("panel-audit-entities");
           if (entityList) {
-            const entities = await intelMod.readAllEntitiesFromVault();
+            const entities = Array.isArray(audit.entities) && audit.entities.length
+              ? audit.entities
+              : await intelMod.readAllEntitiesFromVault();
             if (!entities.length) {
               entityList.innerHTML = '<div class="intel-audit-empty">No entities captured yet.</div>';
             } else {
-              entityList.innerHTML = entities.slice(0, 20).map(ent => `
-                <div class="experience-item">
-                  <div class="experience-item-title">${ent.name || "Untitled"} <span class="experience-tag">${ent.type || "item"}</span></div>
+              const selected = entities.find((e) => e.id === selectedEntityId) || null;
+              entityList.innerHTML =
+                entities.slice(0, 20).map((ent) => {
+                  const retired = isRetiredStatus(ent);
+                  const selectedCls = ent.id === selectedEntityId ? " is-selected" : "";
+                  return `
+                <div class="experience-item${selectedCls}" data-entity-id="${ent.id}">
+                  <div class="experience-item-title">${ent.name || "Untitled"} <span class="experience-tag">${ent.type || "item"}</span>${retired ? '<span class="entity-retired-badge">retired</span>' : ""}</div>
                   <div class="experience-item-meta">${ent.certainty || "unknown"} · ${ent.status || "active"}</div>
                   <div class="experience-item-body">${Object.entries(ent.facts || {}).flatMap(([domain, facts]) => Object.entries(facts || {}).slice(0, 3).map(([k, v]) => `${domain} · ${k}: ${v}`)).join("<br/>") || "No facts captured"}</div>
                   <div class="experience-item-tags">${(ent.tags || []).map(t => `<span class="experience-tag">${t}</span>`).join("")}</div>
-                </div>
-              `).join("");
+                </div>`;
+                }).join("") +
+                (selected
+                  ? `<div class="entity-detail" id="entity-detail-card">
+                      <div class="entity-detail-title">${selected.name || selected.id} ${isRetiredStatus(selected) ? '<span class="entity-retired-badge">retired</span>' : ""}</div>
+                      <div class="experience-item-meta">${selected.type || "item"} · ${selected.status || "active"}</div>
+                      ${
+                        isAiNodeEntity(selected) && !isRetiredStatus(selected)
+                          ? `<button type="button" class="btn-retire-entity" id="btn-retire-entity" data-entity-id="${selected.id}">Retire Entity</button>`
+                          : isAiNodeEntity(selected)
+                            ? `<button type="button" class="btn-retire-entity" disabled>Retired</button>`
+                            : ""
+                      }
+                    </div>`
+                  : "");
+              entityList.querySelectorAll(".experience-item[data-entity-id]").forEach((row) => {
+                row.addEventListener("click", () => {
+                  selectedEntityId = row.getAttribute("data-entity-id");
+                  renderIntelAudit();
+                });
+              });
+              const retireBtn = document.getElementById("btn-retire-entity");
+              if (retireBtn) {
+                retireBtn.addEventListener("click", async (ev) => {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  const id = retireBtn.getAttribute("data-entity-id");
+                  retireBtn.disabled = true;
+                  retireBtn.textContent = "Retiring…";
+                  try {
+                    const result = await intelMod.retireEntityInVault(id, {
+                      reason: "operator retire from Intelligence Audit",
+                    });
+                    if (!result || result.ok === false) {
+                      throw new Error(result && result.error ? result.error : "retire failed");
+                    }
+                    if (typeof window.purgeRetiredNodeSpells === "function") {
+                      window.purgeRetiredNodeSpells();
+                    }
+                    selectedEntityId = id;
+                    await renderIntelAudit();
+                  } catch (err) {
+                    retireBtn.disabled = false;
+                    retireBtn.textContent = "Retire Entity";
+                    console.warn("[retire-entity] failed", err);
+                    alert("Retire failed: " + (err && err.message ? err.message : err));
+                  }
+                });
+              }
             }
           }
 
@@ -1203,6 +1357,14 @@
           }
         } catch (err) {
           console.warn("[IntelAudit] load failed", err);
+          const overviewFail = document.getElementById("panel-audit-overview");
+          if (overviewFail) {
+            overviewFail.innerHTML = auditErrorHtml(
+              "Vault overview failed",
+              err && err.message ? err.message : err,
+              { elapsedHint: "UI timeout is 5s", expectedPath: "D:\\\\GRIMOIRE\\\\GRIMOIRE-FocusIntelligence\\\\" }
+            );
+          }
         }
       }
     })();

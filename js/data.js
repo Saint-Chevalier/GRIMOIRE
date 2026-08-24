@@ -1733,6 +1733,31 @@ export const HERMES_LOCAL_SEND_URL =
 export const SESSION0_NAME = "Session0";
 /** Session0 is retired as an active target. Kept as a record only. */
 export const SESSION0_RETIRED = true;
+/** Retired AI nodes/sessions that must not receive active spells. */
+export const RETIRED_AI_NODES = Object.freeze([
+  "Session0",
+]);
+export function isRetiredAiNode(nameOrSession) {
+  const s = String(nameOrSession || "").trim();
+  if (!s) return false;
+  const low = s.toLowerCase();
+  return RETIRED_AI_NODES.some((r) => low === String(r || "").toLowerCase());
+}
+
+/** True when an entity record (or name) is retired from active capture/draft. */
+export function isRetiredEntity(entOrName) {
+  if (!entOrName) return false;
+  if (typeof entOrName === "string") return isRetiredAiNode(entOrName);
+  const status = String(entOrName.status || "").trim().toLowerCase();
+  if (status === "retired") return true;
+  return (
+    isRetiredAiNode(entOrName.name) ||
+    isRetiredAiNode(entOrName.id) ||
+    isRetiredAiNode(entOrName.linkedSession)
+  );
+}
+/** Entity lifecycle statuses */
+export const ENTITY_STATUSES = Object.freeze(["active", "retired"]);
 /** Accept common aliases for linkedSession / labels */
 export const SESSION0_ALIASES = Object.freeze([
   "session0",
