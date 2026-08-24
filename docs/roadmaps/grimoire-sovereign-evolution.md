@@ -2,12 +2,12 @@
 
 ```yaml
 slug: grimoire-sovereign-evolution
-id: rm-sovereign-evolution-canonical
+id: rm-sovereign-evolution-official
 status: in-progress
-source: scroll-canonical
-canonical: true
+source: scroll-official
+official: true
 createdAt: 2026-07-26T00:31:44.346Z
-updatedAt: 2026-07-26T00:31:44.346Z
+updatedAt: 2026-08-24T00:00:00.000Z
 path: grimoire-local/roadmaps/grimoire-sovereign-evolution.md
 files: ["js/app.js", "js/intelligence.js", "js/data.js", "css/styles.css", "index.html"]
 sync_rule: "SCROLL generates the plan. Grimoire executes and verifies."
@@ -16,7 +16,7 @@ local_only: true
 
 ## Intent
 
-One canonical self-evolution plan for the Grimoire app.
+One official self-evolution plan for the Grimoire app.
 
 **Doctrine:** SCROLL generates the plan. Grimoire executes and verifies.
 **Constraints:** No cloud sync, no accounts, no external APIs. Local-first only.
@@ -28,7 +28,7 @@ One canonical self-evolution plan for the Grimoire app.
 - Per-focus vault + path gate
 - Message Bus local relay
 - SCROLL sovereign brain + auto-engagement
-- X Recruitment Intake (489114c)
+- Local Magic Knight Intake (489114c)
 - Base44 SCROLL = separate track; BSB active (out of scope here)
 
 Every step carries verification_slug, acceptance_criteria, verification_dependencies.
@@ -38,6 +38,7 @@ Complete is gated: `/roadmap verify grimoire-sovereign-evolution` then mark step
 
 - **Sync:** SCROLL generates the plan. Grimoire executes and verifies.
 - Local-first only: no cloud sync, no accounts, no external APIs
+- **Verification gate:** `/roadmap verify grimoire-sovereign-evolution` must block step completion. If it does not, fix the gate before marking any step complete.
 
 ## File targets
 
@@ -54,11 +55,28 @@ Complete is gated: `/roadmap verify grimoire-sovereign-evolution` then mark step
 3. **[pending]** Duplicate focus cleanup _(phase: Phase 1 — Verification & Stability)_
 4. **[in-progress]** /roadmap generate — local NL plans _(phase: Phase 2 — Sovereign Generation)_
 5. **[in-progress]** Spell auto-engagement _(phase: Phase 2 — Sovereign Generation)_
-6. **[in-progress]** X Recruitment Intake _(phase: Phase 2 — Sovereign Generation)_
+6. **[in-progress]** Local Magic Knight Intake _(phase: Phase 2 — Sovereign Generation)_
 7. **[pending]** Mobile dedicated layout _(phase: Phase 3 — Experience & Polish)_
 8. **[pending]** Settings panel JS wiring _(phase: Phase 3 — Experience & Polish)_
 9. **[in-progress]** Export Focus dossier _(phase: Phase 3 — Experience & Polish)_
 10. **[pending]** Self-recursive Focus _(phase: Phase 3 — Experience & Polish)_
+
+## Shipped (post-baseline)
+
+- Entity intelligence model — 5-YAML fact domains (identity, physical, ownership, operational, dynamic) for person/place/item/ai_node/event
+- Entity vault I/O — write/read/search entities from `entities/` subfolder
+- Experience overlay + audit panel — self-contained review/edit surface with YAML roundtrip
+- Intelligence Audit panel — Overview, Experiences, Focuses, Scroll Nodes, Bus Activity, Entities tabs
+- Spell crafter upgrade system — tier/mastery tracking (initiate→adept→master→archon), upgrade triggers on cast/forge, UI badges
+- Session0 retirement — retired flag, routing disabled, UI retired badges, spell cleanup guard
+- Retired AI node awareness — RETIRED_AI_NODES registry, isRetiredAiNode(), purgeRetiredNodeSpells()
+
+## Blockers
+
+- GitHub Pages deploy stability — live site must return HTTP 200 consistently
+- `/roadmap verify` gate enforcement — must actually block step completion, not be ceremonial
+- Spell crafter upgrade verification — confirm triggers fire on cast/forge and UI badges render
+- Retired AI node spell cleanup verification — confirm purgeRetiredNodeSpells() runs on cast and removes stale spells
 
 ## Phase 1 — Verification & Stability
 
@@ -160,14 +178,16 @@ Depends on: p1
 
 Status: **in-progress**
 verification_slug: `sev-02-roadmap-generate-local`
-verification_dependencies: `sev-01-bus-relay-full-body`
+verification_dependencies: none
 Files: `js/data.js`, `js/app.js`
 
 Natural-language roadmap generation fully inside Grimoire (no Base44 dependency). `/roadmap <desc>` and SCROLL parse already form the spine; harden as explicit generate op + sovereign evolution seed.
 
+**Dependency note (2026-08-24):** `generateRoadmapFromDescription` and `buildGrimoireSovereignEvolutionRoadmap` exist in `js/data.js` and run local-only. They do not call bus relay. Step 1 (bus relay serialization) is **not** a hard blocker for Step 4. Residual risk: generated plans that later densen via the bus may still truncate until Step 1 lands.
+
 Acceptance:
 - [ ] parseRoadmapCommand + generateRoadmapFromDescription local-only
-- [ ] Canonical roadmap buildGrimoireSovereignEvolutionRoadmap exportable
+- [ ] Official roadmap buildGrimoireSovereignEvolutionRoadmap exportable
 - [ ] No Base44 / external API calls in generate path
 - [ ] source_match: js/data.js /generateRoadmapFromDescription/
 - [ ] source_match: js/data.js /buildGrimoireSovereignEvolutionRoadmap|SOVEREIGN_EVOLUTION/
@@ -214,22 +234,23 @@ Checks (executable):
 - `source_match` js/app.js /autoGenerateNodeEngageSpells|ENGAGE|isNodeEngageSpell/ — pending
 - `source_match` js/app.js /casts/ — pending
 
-### Step 6: X Recruitment Intake
+### Step 6: Local Magic Knight Intake
 
 Status: **in-progress**
-verification_slug: `sev-02-x-recruit-intake`
+verification_slug: `sev-02-magic-knight-intake`
 verification_dependencies: `sev-02-spell-auto-engage`
 Files: `js/app.js`, `js/intelligence.js`
 
-Auto-capture potential Magic Knight intelligence from X (and Discord phrasing later). Path magic-knights/[handle]/intelligence.md; SCROLL yes/no/maybe; handle private until yes. Baseline shipped 489114c.
+Manual/paste intake for Magic Knight candidates. Operator brings a candidate to GRIMOIRE; intel is captured locally. Path: `magic-knights/[handle]/intelligence.md`. SCROLL knighthood: yes/no/maybe. Handle sealed unless yes.
 
 Acceptance:
 - [ ] writeMagicKnightIntake + parseMagicKnightIntake present
 - [ ] Vault path magic-knights/[handle]/intelligence.md
 - [ ] SCROLL knighthood yes|no|maybe; handle sealed unless yes
+- [ ] No external X/Twitter API
 - [ ] source_match: js/intelligence.js /writeMagicKnightIntake/
 - [ ] source_match: js/intelligence.js /classifyMagicKnighthood/
-- [ ] No external X/Twitter API
+- [ ] source_match: js/app.js /handleMagicKnightIntake/
 
 Checks (executable):
 - `source_match` js/intelligence.js /writeMagicKnightIntake/ — pending
@@ -237,13 +258,10 @@ Checks (executable):
 - `source_match` js/intelligence.js /magic-knights/ — pending
 - `source_match` js/app.js /handleMagicKnightIntake/ — pending
 - `lint` js/intelligence.js — pending
-- `file_exists` js/app.js — pending
-- `lint` js/app.js — pending
 - `file_exists` js/intelligence.js — pending
-- `source_match` js/app.js /intelligence/ — pending
+- `lint` js/app.js — pending
+- `file_exists` js/app.js — pending
 - `vault_entry` grimoire-local/roadmaps — pending
-- `source_match` js/app.js /Twitter/ — pending
-- `source_match` js/app.js /maybe/ — pending
 
 ## Phase 3 — Experience & Polish
 
@@ -254,7 +272,7 @@ Depends on: p2
 
 Status: **pending**
 verification_slug: `sev-03-mobile-layout`
-verification_dependencies: `sev-02-x-recruit-intake`
+verification_dependencies: `sev-02-magic-knight-intake`
 Files: `css/styles.css`, `index.html`, `js/app.js`
 
 Input-first mobile shell: bottom nav, full-screen chat, swipeable spells panel. CSS + minimal app shell flags; no native store dependency.
@@ -360,7 +378,10 @@ Checks (executable):
 ## Iterations (append-only)
 
 ### [2026-07-26T00:31:44.346Z] note
-Canonical roadmap authored — SCROLL plan / Grimoire execute+verify. Local-first only.
+Official roadmap authored — SCROLL plan / Grimoire execute+verify. Local-first only.
+
+### [2026-08-24] note
+Cell2 population+patch directive applied. Terminology locked to “official” / “reference”. Shipped ledger + blockers added. Step 6 is local Magic Knight intake (no external API). Step 4 decoupled from bus-relay serialization after confirming `generateRoadmapFromDescription` / `buildGrimoireSovereignEvolutionRoadmap` exist local-only.
 
 ---
 _Grimoire Roadmap Engine · local-first · append-only iterations_
