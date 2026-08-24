@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-001" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-001" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-002" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-002" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -297,6 +297,7 @@
         <button type="button" class="intel-audit-tab" data-tab="focuses" id="tab-audit-focuses">Focuses</button>
         <button type="button" class="intel-audit-tab" data-tab="scroll" id="tab-audit-scroll">Scroll Nodes</button>
         <button type="button" class="intel-audit-tab" data-tab="bus" id="tab-audit-bus">Bus Activity</button>
+        <button type="button" class="intel-audit-tab" data-tab="glyphs" id="tab-audit-glyphs">Glyphs</button>
       </div>
       <div class="intel-audit-content" id="intel-audit-content">
         <div class="intel-audit-tab-panel active" data-panel="overview" id="panel-audit-overview">
@@ -316,6 +317,9 @@
         </div>
         <div class="intel-audit-tab-panel" data-panel="bus" id="panel-audit-bus" hidden>
           <div class="intel-audit-empty">Loading bus activity…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="glyphs" id="panel-audit-glyphs" hidden>
+          <div class="intel-audit-empty">Loading glyphs…</div>
         </div>
       </div>
     </aside>
@@ -696,7 +700,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-001"></script>
+  <script type="module" src="js/app.js?v=exec-002"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1036,8 +1040,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-001");
-          const intelMod = await import("./js/intelligence.js?v=exec-001");
+          const dataMod = await import("./js/data.js?v=exec-002");
+          const intelMod = await import("./js/intelligence.js?v=exec-002");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1180,7 +1184,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-001");
+          const intelMod = await import("./js/intelligence.js?v=exec-002");
           const audit = Object.assign(
             {
               focuses: [],
@@ -1188,6 +1192,7 @@
               experiences: [],
               scrollNodes: [],
               busActivity: [],
+              glyphs: [],
             },
             await withUiTimeout(
               intelMod.auditVaultIntelligence({ timeoutMs: 4000 }),
@@ -1214,6 +1219,7 @@
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.scrollNodes.length}</span><span class="intel-audit-metric-label">Scroll Nodes</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.entities?.length || 0}</span><span class="intel-audit-metric-label">Entities</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.busActivity.length}</span><span class="intel-audit-metric-label">Bus Events</span></div>
+                  <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.glyphs?.length || 0}</span><span class="intel-audit-metric-label">Glyphs</span></div>
                 </div>
                 <div class="intel-audit-meta">Generated: ${new Date(audit.generatedAt).toLocaleString()}</div>
               </div>
@@ -1351,6 +1357,22 @@
                   <div class="experience-item-title">${evt.type || "event"}</div>
                   <div class="experience-item-meta">${evt.focus || ""} · ${evt.time || ""}</div>
                   <div class="experience-item-body">${evt.summary || evt.payload || ""}</div>
+                </div>
+              `).join("");
+            }
+          }
+
+          const glyphList = document.getElementById("panel-audit-glyphs");
+          if (glyphList) {
+            const glyphs = Array.isArray(audit.glyphs) ? audit.glyphs : [];
+            if (!glyphs.length) {
+              glyphList.innerHTML = '<div class="intel-audit-empty">No glyphs in vault yet. Link the vault folder that contains glyph-dictionary/.</div>';
+            } else {
+              glyphList.innerHTML = glyphs.map((g) => `
+                <div class="experience-item">
+                  <div class="experience-item-title">${g.name || "Untitled"} <span class="experience-tag">${g.kind || "glyph"}</span></div>
+                  <div class="experience-item-meta">${g.path || ""} · ${g.instanceCount || 0} instances</div>
+                  <div class="experience-item-body">${g.abstract || ""}</div>
                 </div>
               `).join("");
             }

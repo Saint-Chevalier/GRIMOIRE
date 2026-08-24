@@ -412,7 +412,12 @@ export const INTEL_CATEGORIES = Object.freeze([
   "entity_fact",
   "entity_static",
   "entity_dynamic",
+  "glyph",
 ]);
+
+/** Vault folder for the 4-field glyph dictionary */
+export const GLYPH_DICTIONARY_DIR = "glyph-dictionary";
+export const GLYPH_KINDS = Object.freeze(["master", "worker"]);
 
 /** Entity types for structured entity intelligence */
 export const ENTITY_TYPES = Object.freeze([

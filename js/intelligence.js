@@ -37,6 +37,7 @@ import {
   parseEntityMarkdown,
   isRetiredAiNode,
   isRetiredEntity,
+  GLYPH_DICTIONARY_DIR,
 } from "./data.js";
 import { computeFocusHealth } from "./health.js";
 
@@ -4042,6 +4043,7 @@ export async function auditVaultIntelligence(opts = {}) {
       experiences: [],
       scrollNodes: [],
       busActivity: [],
+      glyphs: [],
       generatedAt: new Date().toISOString(),
     };
   }
@@ -4054,6 +4056,7 @@ export async function auditVaultIntelligence(opts = {}) {
     experiences: [],
     scrollNodes: [],
     busActivity: [],
+    glyphs: [],
     generatedAt: new Date().toISOString(),
     debug: {
       picker: true,
@@ -4066,7 +4069,13 @@ export async function auditVaultIntelligence(opts = {}) {
     await withTimeout(
       (async () => {
         for await (const [name, entry] of handle.entries()) {
-          if (name === "experiences" || name === "entities" || name === "README.md" || name.startsWith(".")) continue;
+          if (
+            name === "experiences" ||
+            name === "entities" ||
+            name === GLYPH_DICTIONARY_DIR ||
+            name === "README.md" ||
+            name.startsWith(".")
+          ) continue;
           if (entry.kind === "directory") {
             result.focuses.push({
               id: name,
@@ -4078,6 +4087,7 @@ export async function auditVaultIntelligence(opts = {}) {
 
         result.entities = await readAllEntitiesFromVault();
         result.experiences = await readExperiencesFromVault();
+        result.glyphs = await readGlyphsFromVault();
         result.busActivity = getBusActivityLog().slice(-20);
         result.scrollNodes = buildScrollNodesFromConversations();
       })(),
@@ -4089,6 +4099,7 @@ export async function auditVaultIntelligence(opts = {}) {
       focuses: result.focuses.length,
       entities: result.entities.length,
       experiences: result.experiences.length,
+      glyphs: result.glyphs.length,
       elapsedMs: result.debug.elapsedMs,
     });
   } catch (err) {
@@ -4152,6 +4163,65 @@ export async function vaultHealthCheck() {
 
 /** Entity vault folder */
 export const ENTITIES_DIR = "entities";
+
+export { GLYPH_DICTIONARY_DIR };
+
+function parseGlyphMarkdown(text, relPath, kind) {
+  const raw = String(text || "");
+  const title =
+    (raw.match(/^#\s*Glyph:\s*(.+)$/im) || raw.match(/^#\s+(.+)$/m) || [, ""])[1].trim() ||
+    relPath;
+  const abs = (raw.match(/##\s*Abstract\s*\n+([\s\S]*?)(?=\n##\s|$)/i) || [, ""])[1]
+    .trim()
+    .split(/\n/)[0];
+  const instances = (raw.match(/##\s*Verified Instances\s*\n([\s\S]*?)(?=\n##\s|$)/i) || [
+    ,
+    "",
+  ])[1]
+    .split("\n")
+    .filter((l) => /^\s*-\s+/.test(l)).length;
+  return {
+    id: relPath,
+    name: title,
+    kind,
+    path: relPath,
+    abstract: abs,
+    instanceCount: instances,
+    type: "glyph",
+  };
+}
+
+/**
+ * Read master + worker glyphs from vault `glyph-dictionary/`.
+ * Execution Directive 002.
+ */
+export async function readGlyphsFromVault() {
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) return [];
+  const out = [];
+  try {
+    const root = await handle.getDirectoryHandle(GLYPH_DICTIONARY_DIR, { create: false });
+    for (const kind of ["master", "worker"]) {
+      try {
+        const dir = await root.getDirectoryHandle(`${kind}-glyphs`, { create: false });
+        for await (const [name, fileHandle] of dir.entries()) {
+          if (!/\.md$/i.test(name)) continue;
+          try {
+            const text = await readExistingFocusText(fileHandle);
+            out.push(parseGlyphMarkdown(text, `${GLYPH_DICTIONARY_DIR}/${kind}-glyphs/${name}`, kind));
+          } catch (err) {
+            console.debug("[glyphs] skip unreadable", name, err);
+          }
+        }
+      } catch {
+        /* folder missing */
+      }
+    }
+  } catch {
+    console.debug("[glyphs] no glyph-dictionary folder in linked vault");
+  }
+  return out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
 
 /** Vault path for an entity file */
 export function entityVaultPath(entityId) {

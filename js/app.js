@@ -141,13 +141,13 @@ import {
   evaluateSpellUpgrade,
   applySpellUpgrade,
   buildSpellCrafterContext,
-} from "./data.js?v=exec-001";
+} from "./data.js?v=exec-002";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-001";
+} from "./stars.js?v=exec-002";
 import {
   initUniverse,
   setFocusUniverse,
@@ -155,7 +155,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-001";
+} from "./universe.js?v=exec-002";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -222,19 +222,19 @@ import {
   detectExperienceFromText,
   autoCaptureEntitiesFromText,
   autoCaptureNodeIntelFromText,
-} from "./intelligence.js?v=exec-001";
+} from "./intelligence.js?v=exec-002";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-001";
+} from "./health.js?v=exec-002";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-001";
+} from "./pulse.js?v=exec-002";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -10564,7 +10564,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-001";
+window.__grimoireBootVersion = "exec-002";
 try {
   const boot = document.getElementById("grimoire-boot");
   if (boot) boot.setAttribute("data-ready", "1");
