@@ -86,6 +86,7 @@ Status: **in-progress**
 
 Status: **pending**
 verification_slug: `sev-01-bus-relay-full-body`
+note: "Code fix landed in Execution Directive 003 — densen/relay keep full body + payload-size logs. Completion still gated on `/roadmap verify`."
 Files: `js/app.js`, `js/intelligence.js`, `js/data.js`
 
 Preserve full message body on bus route/relay densen and chat acks — never truncate to a preview-only payload. Display may summarize; vault + densen must keep full body.

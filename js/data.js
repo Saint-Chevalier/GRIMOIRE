@@ -1809,13 +1809,13 @@ export function resolveSpellLinkedSession(spell, focus = null) {
 
 /**
  * UI label for spell send action.
- * linkedSession = Session0 (or empty fleet default) → "Send to Session0"
+ * Session0 is retired — never offer "Send to Session0" as an active target.
  * linkedSession = specific node → "Send to [session]"
  */
 export function spellSendTargetLabel(spell, focus = null) {
   const session = resolveSpellLinkedSession(spell, focus);
   if (SESSION0_RETIRED && (!session || isSession0(session))) return `${SESSION0_NAME} (retired)`;
-  if (!session || isSession0(session)) return `Send to ${SESSION0_NAME}`;
+  if (!session || isSession0(session)) return `${SESSION0_NAME} (retired)`;
   return `Send to ${session}`;
 }
 
@@ -1868,11 +1868,16 @@ export function makeHermesDeliveryPayload({
   orchestrate = true,
 } = {}) {
   const rawSession = String(sessionId || focus?.linkedSession || "").trim();
-  const injectId = SESSION0_RETIRED
-    ? rawSession || ""
-    : orchestrate
-      ? resolveHermesInjectSessionId(rawSession)
-      : rawSession || SESSION0_NAME;
+  const explicit = normalizeLinkedSessionLabel(rawSession);
+  // Retired: explicit linkedSession only — never default or inject Session0.
+  let injectId = "";
+  if (SESSION0_RETIRED) {
+    injectId = explicit && !isSession0(explicit) ? explicit : "";
+  } else if (orchestrate) {
+    injectId = resolveHermesInjectSessionId(rawSession);
+  } else {
+    injectId = explicit || SESSION0_NAME;
+  }
   return {
     sessionId: injectId,
     text: String(text || "").trim(),
@@ -1881,6 +1886,7 @@ export function makeHermesDeliveryPayload({
     focusId: focus?.id || null,
     focusName: focus?.name || null,
     orchestrator: SESSION0_RETIRED ? "retired" : SESSION0_NAME,
+    linkedSession: injectId,
   };
 }
 
@@ -6115,22 +6121,34 @@ export function nextTierForMastery(mastery) {
 }
 
 /**
+ * Vault-aware mastery score from cast count + intel context.
+ * Used by tryUpgradeSpell so evaluation is never silent.
+ */
+export function computeSpellMasteryScore(spell, intel = {}) {
+  return computeMasteryGain(spell, intel);
+}
+
+/**
  * Evaluate whether a spell should upgrade.
+ * Uses projected mastery (current + vault intel score), not pre-gain tier.
  * Returns upgrade object or null.
  */
 export function evaluateSpellUpgrade(spell, intelContext = {}) {
   ensureSpellCrafterFields(spell);
-  const current = spell.tier;
-  const next = nextTierForMastery(spell.mastery);
-  if (current === next) return null;
+  const score = computeMasteryGain(spell, intelContext);
+  const projected = Math.min(250, Math.max(Number(spell.mastery) || 0, score));
+  const current = spell.tier || "initiate";
+  const next = nextTierForMastery(projected);
+  const currentOrder = SPELL_TIER_ORDER[current] ?? 0;
+  const nextOrder = SPELL_TIER_ORDER[next] ?? 0;
+  if (nextOrder <= currentOrder) return null;
 
-  const masteryGain = computeMasteryGain(spell, intelContext);
-  if (masteryGain <= 0) return null;
-
+  const masteryGain = Math.max(1, projected - (Number(spell.mastery) || 0));
   return {
     fromTier: current,
     toTier: next,
     masteryGain,
+    projectedMastery: projected,
     reason: upgradeReason(spell, intelContext),
     suggestedRefinements: suggestRefinements(spell, intelContext),
   };
@@ -6226,11 +6244,26 @@ function suggestRefinements(spell, intel) {
 
 /**
  * Build spell crafter context from vault + focus state.
+ * Dynamic import avoids a data.js ↔ intelligence.js cycle.
  */
 export async function buildSpellCrafterContext(convo) {
-  const entities = await readAllEntitiesFromVault();
-  const experiences = await readExperiencesFromVault();
-  const nodes = buildScrollNodesFromConversations();
+  let entities = [];
+  let experiences = [];
+  let nodes = [];
+  try {
+    const intel = await import("./intelligence.js?v=exec-003");
+    if (typeof intel.readAllEntitiesFromVault === "function") {
+      entities = (await intel.readAllEntitiesFromVault()) || [];
+    }
+    if (typeof intel.readExperiencesFromVault === "function") {
+      experiences = (await intel.readExperiencesFromVault()) || [];
+    }
+    if (typeof intel.buildScrollNodesFromConversations === "function") {
+      nodes = intel.buildScrollNodesFromConversations() || [];
+    }
+  } catch (err) {
+    console.debug("[spell-crafter] vault intel unavailable", err);
+  }
   const hasAlignment = convo?.alignmentProfile?.signal != null;
   const hasEntityFacts = entities.some((e) => Object.values(e.facts || {}).some((d) => Object.keys(d || {}).length > 0));
 

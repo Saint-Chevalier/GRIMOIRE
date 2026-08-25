@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-002" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-002" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-003" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-003" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -700,7 +700,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-002"></script>
+  <script type="module" src="js/app.js?v=exec-003"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1040,8 +1040,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-002");
-          const intelMod = await import("./js/intelligence.js?v=exec-002");
+          const dataMod = await import("./js/data.js?v=exec-003");
+          const intelMod = await import("./js/intelligence.js?v=exec-003");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1184,7 +1184,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-002");
+          const intelMod = await import("./js/intelligence.js?v=exec-003");
           const audit = Object.assign(
             {
               focuses: [],
@@ -1277,14 +1277,26 @@
           // Entities tab
           const entityList = document.getElementById("panel-audit-entities");
           if (entityList) {
+            const entityIo = audit.entityIo || (typeof intelMod.getLastEntityIo === "function" ? intelMod.getLastEntityIo() : null);
             const entities = Array.isArray(audit.entities) && audit.entities.length
               ? audit.entities
               : await intelMod.readAllEntitiesFromVault();
+            const entityErrorHtmlBlock =
+              entityIo && entityIo.ok === false
+                ? auditErrorHtml(
+                    "Entity vault I/O failed",
+                    entityIo.error || "unknown error",
+                    entityIo
+                  )
+                : "";
             if (!entities.length) {
-              entityList.innerHTML = '<div class="intel-audit-empty">No entities captured yet.</div>';
+              entityList.innerHTML =
+                entityErrorHtmlBlock ||
+                '<div class="intel-audit-empty">No entities captured yet.</div>';
             } else {
               const selected = entities.find((e) => e.id === selectedEntityId) || null;
               entityList.innerHTML =
+                entityErrorHtmlBlock +
                 entities.slice(0, 20).map((ent) => {
                   const retired = isRetiredStatus(ent);
                   const selectedCls = ent.id === selectedEntityId ? " is-selected" : "";

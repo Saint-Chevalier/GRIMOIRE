@@ -141,13 +141,17 @@ import {
   evaluateSpellUpgrade,
   applySpellUpgrade,
   buildSpellCrafterContext,
-} from "./data.js?v=exec-002";
+  computeSpellMasteryScore,
+  makeHermesDeliveryPayload,
+  resolveHermesInjectSessionId,
+  SESSION0_RETIRED,
+} from "./data.js?v=exec-003";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-002";
+} from "./stars.js?v=exec-003";
 import {
   initUniverse,
   setFocusUniverse,
@@ -155,7 +159,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-002";
+} from "./universe.js?v=exec-003";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -222,19 +226,20 @@ import {
   detectExperienceFromText,
   autoCaptureEntitiesFromText,
   autoCaptureNodeIntelFromText,
-} from "./intelligence.js?v=exec-002";
+  getLastEntityIo,
+} from "./intelligence.js?v=exec-003";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-002";
+} from "./health.js?v=exec-003";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-002";
+} from "./pulse.js?v=exec-003";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -3507,6 +3512,10 @@ async function manualSendSpellToSession(spell, { source = "operator" } = {}) {
   } else {
     spell.linkedSession = session;
   }
+  if (SESSION0_RETIRED && (!session || isSession0(session))) {
+    toast(`Copied — ${SESSION0_NAME} retired · record only`, "success");
+    return { ok: false, reason: "session0_retired" };
+  }
 
   const fleetSessions = listFleetSessions(state.conversations || []);
   const broadcast = isSession0BroadcastTarget(spell, focus);
@@ -3862,12 +3871,11 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
         <pre class="spell-detail-prompt" id="spell-detail-prompt-text">${escapeHtml(md)}</pre>
       </div>
       <div class="spell-detail-section fleet-cast-section">
-        <h3>Fleet · Session0 Orchestrator</h3>
+        <h3>Fleet · linked session</h3>
         <p class="spell-detail-directions">
-          Clipboard-first manual cast: copy full spell text, paste into
-          <strong>Hermes Session0</strong>. No HTTP inject. No bridge. No watcher.
-          Session0 may use native Hermes <code>/msg</code> for fleet broadcast.
-          Paste replies back into this Focus to densen. Jacob is the crown.
+          Clipboard-first manual cast: copy full spell text, paste into the
+          <strong>linked Hermes session</strong>. No HTTP inject. No bridge. No watcher.
+          Session0 is retired — record only. Paste replies back into this Focus to densen.
         </p>
         <div class="fleet-cast-controls">
           <label class="fleet-auto-cast-label">
@@ -3877,17 +3885,21 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
           <span class="fleet-cast-status" data-cast="${escapeHtml(spell.castStatus || "pending")}">${escapeHtml(
             String(spell.castStatus || "pending").toUpperCase()
           )}</span>
-          <button type="button" class="btn-secondary btn-sm session0-send is-fleet-node" data-action="fleet-deploy-now" title="Route to linked session">
+          ${
+            SESSION0_RETIRED && isSession0BroadcastTarget(spell, focus)
+              ? `<span class="session0-badge is-retired" title="Session0 retired — record only">Session0 retired · record only</span>`
+              : `<button type="button" class="btn-secondary btn-sm session0-send is-fleet-node" data-action="fleet-deploy-now" title="Copy full spell — paste into linked session">
             ${escapeHtml(spellSendTargetLabel(spell, focus))}
-          </button>
+          </button>`
+          }
         </div>
         <p class="contrib-empty">
-          <span class="session0-badge${isSession0BroadcastTarget(spell, focus) && !SESSION0_RETIRED ? " is-master" : ""}">${escapeHtml(
+          <span class="session0-badge${SESSION0_RETIRED ? " is-retired" : isSession0BroadcastTarget(spell, focus) ? " is-master" : ""}">${escapeHtml(
             SESSION0_RETIRED
               ? "Session0 · retired"
               : isSession0BroadcastTarget(spell, focus)
                 ? "Session0 · master"
-                : `via Session0 → ${resolveSpellLinkedSession(spell, focus) || "—"}`
+                : `linked → ${resolveSpellLinkedSession(spell, focus) || "—"}`
           )}</span>
           · linked: ${escapeHtml(resolveSpellLinkedSession(spell, focus) || "none")}
           ${spell.autoCastError ? ` · ${escapeHtml(spell.autoCastError)}` : ""}
@@ -8425,7 +8437,7 @@ function commitSpell(convo, spell, { silentToast = false } = {}) {
   }
 
   // Spell Crafter: evaluate upgrade after forge
-  void tryUpgradeSpell(spell, convo);
+  void tryUpgradeSpell(spell, convo, { trigger: "forge" });
 
   persist();
   renderSpells();
@@ -8709,7 +8721,7 @@ async function renderBrainLog(focus) {
     const busLog = getBusActivityLog();
     const fleet = buildFleetSnapshot();
     if (els.brainSub) {
-      els.brainSub.textContent = `Session0 master · fleet ${fleet.fleetCount} · Active ${fleet.active} · Idle ${fleet.idle} · Dead ${fleet.dead} · Auto-cast ${fleet.autoCastReady} · bus ${busLog.length}`;
+      els.brainSub.textContent = `Session0 retired · fleet ${fleet.fleetCount} · Active ${fleet.active} · Idle ${fleet.idle} · Dead ${fleet.dead} · Auto-cast ${fleet.autoCastReady} · bus ${busLog.length}`;
     }
     els.brainBody.innerHTML = "";
 
@@ -8719,11 +8731,11 @@ async function renderBrainLog(focus) {
     const master = fleet.master;
     const fleetRows = fleet.fleetRows || fleet.rows.filter((r) => !r.isMaster);
     fleetSec.innerHTML = `
-      <h3 class="brain-bus-title">Session0 · Hermes fleet</h3>
+      <h3 class="brain-bus-title">Fleet · Hermes sessions</h3>
       <p class="fleet-motto">the scroll never forgets. the saint always remembers.</p>
       <div class="session0-orchestrator-banner" role="status">
         <div class="session0-orchestrator-head">
-          <span class="session0-badge is-retired">Session0</span>
+          <span class="session0-badge is-retired">Session0 · retired</span>
           <strong>Retired orchestrator</strong>
           <span class="session0-orchestrator-role">Kept as record only · no active routing</span>
         </div>
@@ -8744,7 +8756,7 @@ async function renderBrainLog(focus) {
         }
       </div>
       <div class="fleet-stats">
-        <span class="fleet-stat session0-stat">Session0 master</span>
+        <span class="fleet-stat session0-stat">Session0 retired</span>
         <span class="fleet-stat">${fleet.fleetCount} fleet</span>
         <span class="fleet-stat" data-breath="Active">${fleet.active} Active</span>
         <span class="fleet-stat" data-breath="Idle">${fleet.idle} Idle</span>
@@ -8797,8 +8809,8 @@ async function renderBrainLog(focus) {
         </table>
       </div>
       <div class="brain-session-send-list">
-        <h3 class="brain-bus-title">Send via Session0</h3>
-        <p class="fleet-link-hint">All sends inject Session0. Unicast targets use Session0 → native /msg. No per-session HTTP.</p>
+        <h3 class="brain-bus-title">Send to linked session</h3>
+        <p class="fleet-link-hint">Session0 is retired. Clipboard handoff goes to the linked fleet session only. No HTTP inject.</p>
         ${
           fleet.rows.filter((r) => r.session).length
             ? fleet.rows
@@ -8812,7 +8824,7 @@ async function renderBrainLog(focus) {
                 <span class="hermes-delivery-status" data-status="${escapeHtml(r.deliveryStatus || "")}">${escapeHtml(r.deliveryLabel || "")}</span>
               </div>
               <div class="hermes-send-row brain-hermes-send">
-                <input type="text" class="hermes-send-input" data-brain-send-input="${escapeHtml(r.id)}" placeholder="${r.isMaster ? "Session0 retired — no active routing" : `Relay via Session0 → ${escapeHtml(r.session)}…`}" autocomplete="off" />
+                <input type="text" class="hermes-send-input" data-brain-send-input="${escapeHtml(r.id)}" placeholder="${r.isMaster ? "Session0 retired — no active routing" : `Relay to ${escapeHtml(r.session)}…`}" autocomplete="off" />
                 <button type="button" class="btn-primary btn-sm session0-send${r.isMaster ? " is-session0 is-retired" : " is-fleet-node"}" data-fleet-action="send" data-id="${escapeHtml(r.id)}" ${r.isMaster ? "disabled" : ""}>${r.isMaster ? "Session0 retired" : `Send to ${escapeHtml(r.session)}`}</button>
               </div>
             </div>`
@@ -9000,8 +9012,8 @@ function syncEditHermesSendUi(focus) {
     btn.title = SESSION0_RETIRED && isSession0(focus?.linkedSession)
       ? "Session0 retired — record only"
       : isSession0(focus?.linkedSession)
-        ? "Send to Session0 (master orchestrator)"
-        : `Route via Session0 → ${normalizeLinkedSessionLabel(focus?.linkedSession)}`;
+        ? "Session0 retired — record only"
+        : `Send to ${normalizeLinkedSessionLabel(focus?.linkedSession)}`;
     btn.classList.toggle("is-session0", isSession0(focus?.linkedSession));
     btn.classList.toggle("is-fleet-node", !isSession0(focus?.linkedSession));
   }
@@ -9021,10 +9033,13 @@ async function sendToLinkedSession(focus, text, { silent = false } = {}) {
     return { ok: false, reason: 'empty' };
   }
   const linked = normalizeLinkedSessionLabel(focus.linkedSession || '');
-  // Allow send when Session0 is the implicit target even if field empty on a master focus
   if (!linked) {
-    if (!silent) toast('Set linked session first (Session0 or fleet node)', '');
+    if (!silent) toast('Set linked session first (active fleet node)', '');
     return { ok: false, reason: 'unlinked' };
+  }
+  if (SESSION0_RETIRED && isSession0(linked)) {
+    if (!silent) toast(`Copied — ${SESSION0_NAME} retired · record only`, 'success');
+    return { ok: false, reason: 'session0_retired' };
   }
 
   const fleetSessions = listFleetSessions(state.conversations || []);
@@ -9133,7 +9148,7 @@ async function runAutoCastSpell(spell, { source = "operator", force = false } = 
 
   if (focus) ensureFleetFocusFields(focus);
 
-  // Default linked session → Session0 when focus has none (fleet broadcast path)
+  // Linked session only — Session0 is retired, never default to it.
   let session = resolveSpellLinkedSession(spell, focus);
   if (!session) {
     if (SESSION0_RETIRED) {
@@ -9145,6 +9160,13 @@ async function runAutoCastSpell(spell, { source = "operator", force = false } = 
     }
   } else {
     spell.linkedSession = session;
+  }
+  if (SESSION0_RETIRED && (!session || isSession0(session))) {
+    spell.castStatus = "failed";
+    spell.autoCastError = "Session0 retired · record only";
+    persist();
+    toast(`Copied — ${SESSION0_NAME} retired · record only`, "success");
+    return { ok: false, reason: "session0_retired" };
   }
 
   const broadcast = isSession0BroadcastTarget(spell, focus);
@@ -10293,7 +10315,9 @@ function markSent(id, { fromCopy = false, fromSelfCast = false, silent = false }
   // Spell Crafter: evaluate upgrade after cast
   const convoForUpgrade = state.conversations.find((c) => c.id === spell.conversationId);
   if (convoForUpgrade) {
-    void tryUpgradeSpell(spell, convoForUpgrade);
+    void tryUpgradeSpell(spell, convoForUpgrade, { trigger: "cast" });
+  } else {
+    console.debug("[spell-crafter] silent — no focus for cast upgrade", { id: spell.id });
   }
 
   // If alignment was sent without a reply yet, nudge user (skip when silent / already answered)
@@ -10564,7 +10588,16 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-002";
+window.__grimoireBootVersion = "exec-003";
+window.__grimoireDirective003 = {
+  tryUpgradeSpell,
+  evaluateSpellUpgrade,
+  computeSpellMasteryScore,
+  resolveHermesInjectSessionId,
+  makeHermesDeliveryPayload,
+  SESSION0_RETIRED,
+  getLastEntityIo,
+};
 try {
   const boot = document.getElementById("grimoire-boot");
   if (boot) boot.setAttribute("data-ready", "1");
@@ -12472,14 +12505,54 @@ window.addEventListener("unhandledrejection", (ev) => {
 /**
  * Spell Crafter: evaluate upgrade after cast/forge.
  * Mutates spell in place when conditions are met.
+ * Always logs — silent (no-tier) paths must not be invisible.
  */
-async function tryUpgradeSpell(spell, convo) {
-  if (!spell || !convo) return;
+async function tryUpgradeSpell(spell, convo, { trigger = "unknown" } = {}) {
+  if (!spell || !convo) {
+    console.debug("[spell-crafter] silent — missing spell or convo", { trigger });
+    return null;
+  }
   ensureSpellCrafterFields(spell);
   const ctx = await buildSpellCrafterContext(convo);
+  const score = computeSpellMasteryScore(spell, ctx);
+  const prevMastery = Number(spell.mastery) || 0;
+  if (score > prevMastery) {
+    spell.mastery = Math.min(250, score);
+  }
   const upgrade = evaluateSpellUpgrade(spell, ctx);
-  if (!upgrade) return;
+  console.debug("[spell-crafter] evaluate", {
+    trigger,
+    id: spell.id,
+    title: spell.title || spell.purpose || "",
+    tier: spell.tier,
+    mastery: spell.mastery,
+    castCount: spell.castCount,
+    intel: {
+      entityCount: ctx.entityCount || 0,
+      nodeCount: ctx.nodeCount || 0,
+      experienceCount: ctx.experienceCount || 0,
+      hasAlignment: Boolean(ctx.hasAlignment),
+      hasEntityFacts: Boolean(ctx.hasEntityFacts),
+    },
+    upgrade: upgrade
+      ? { from: upgrade.fromTier, to: upgrade.toTier, gain: upgrade.masteryGain }
+      : null,
+  });
+  if (!upgrade) {
+    console.debug("[spell-crafter] silent — no tier crossing", {
+      trigger,
+      id: spell.id,
+      tier: spell.tier,
+      mastery: spell.mastery,
+      score,
+    });
+    if (spell.mastery !== prevMastery) persist();
+    return null;
+  }
 
   applySpellUpgrade(spell, upgrade, { refine: true });
+  persist();
+  renderSpells();
   toast(`✦ Spell upgraded: ${upgrade.fromTier} → ${upgrade.toTier}`, "success");
+  return upgrade;
 }

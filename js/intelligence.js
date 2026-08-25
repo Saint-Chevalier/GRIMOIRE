@@ -2690,20 +2690,42 @@ export async function densenBusMessage(nodeOrFocus, message, opts = {}) {
     localOnly: opts.localOnly !== false,
   });
 
+  const beforeBytes = body.length;
+  console.debug("[bus-relay] densen before", {
+    name,
+    kind: bus.kind,
+    bytes: beforeBytes,
+    channel,
+  });
+
+  const vaultBody = [
+    `**Cell2 Message Bus** · ${bus.kind}`,
+    `To: **${bus.to}** · Channel: **${bus.channel}** · From: ${bus.from}`,
+    ``,
+    bus.body,
+  ].join("\n");
+
   const result = await appendEntityIntelligence(focusLike, {
-    body: [
-      `**Cell2 Message Bus** · ${bus.kind}`,
-      `To: **${bus.to}** · Channel: **${bus.channel}** · From: ${bus.from}`,
-      ``,
-      bus.body,
-    ].join("\n"),
+    body: vaultBody,
     source: opts.source || "user",
     category: opts.category || "node_intel",
     certainty: opts.certainty || "inferred",
-    tags: ["bus", bus.kind, bus.channel, "auto-write"].filter(Boolean),
+    tags: ["bus", bus.kind, bus.channel, "auto-write", "full-body"].filter(Boolean),
     focusId: opts.focusId || focusLike.id || null,
     refreshScroll: true,
   });
+
+  const afterBytes = String(bus.body || "").length;
+  console.debug("[bus-relay] densen after", {
+    name,
+    bytes: afterBytes,
+    vaultBytes: vaultBody.length,
+    method: result?.method || "unknown",
+    truncated: afterBytes < beforeBytes,
+  });
+  if (afterBytes < beforeBytes) {
+    console.error("[bus-relay] truncation detected", { beforeBytes, afterBytes });
+  }
 
   // Ensure SCROLL curates even if append returned memory-only
   scheduleScrollListCurate({ immediate: false });
@@ -2714,10 +2736,12 @@ export async function densenBusMessage(nodeOrFocus, message, opts = {}) {
     nodeName: name,
     channel,
     localOnly: bus.localOnly,
-    detail: body.slice(0, 500),
+    // Display may summarize; vault already has full body
+    detail: body,
+    payloadBytes: beforeBytes,
   });
 
-  return { ok: true, bus, result };
+  return { ok: true, bus, result, payloadBytes: beforeBytes, fullBody: true };
 }
 
 /**
@@ -3160,6 +3184,12 @@ export async function relayIntelBetweenFocuses(sourceFocus, destFocus, hint = ""
     bits.push("No densened intelligence on file yet for this node.");
   }
   const text = bits.join("\n");
+  console.debug("[bus-relay] relay before", {
+    from: sourceFocus.name,
+    to: destFocus.name,
+    hintBytes: fullHint.length,
+    intelBits: bits.length,
+  });
   // Vault write: full text only
   await appendEntityIntelligence(destFocus, {
     body: text,
@@ -3168,16 +3198,23 @@ export async function relayIntelBetweenFocuses(sourceFocus, destFocus, hint = ""
     certainty: "inferred",
     tags: ["bus", "relay", "full-body", sourceFocus.name],
   });
+  console.debug("[bus-relay] relay after", {
+    from: sourceFocus.name,
+    to: destFocus.name,
+    bytes: text.length,
+    fullBody: true,
+  });
   pushBusActivity({
     kind: "relay",
     summary: `Relay **${sourceFocus.name}** → **${destFocus.name}** (${fullHint.length || text.length} chars full body)`,
     nodeName: sourceFocus.name,
     channel,
     localOnly: true,
-    // Activity log may summarize; vault already has full body
+    // Activity log may summarize in UI; vault already has full body
     detail: fullHint || text,
+    payloadBytes: text.length,
   });
-  return { ok: true, text, fullBody: true };
+  return { ok: true, text, fullBody: true, payloadBytes: text.length };
 }
 
 /**
@@ -4044,6 +4081,7 @@ export async function auditVaultIntelligence(opts = {}) {
       scrollNodes: [],
       busActivity: [],
       glyphs: [],
+      entityIo: getLastEntityIo(),
       generatedAt: new Date().toISOString(),
     };
   }
@@ -4090,6 +4128,7 @@ export async function auditVaultIntelligence(opts = {}) {
         result.glyphs = await readGlyphsFromVault();
         result.busActivity = getBusActivityLog().slice(-20);
         result.scrollNodes = buildScrollNodesFromConversations();
+        result.entityIo = getLastEntityIo();
       })(),
       timeoutMs,
       "auditVaultIntelligence"
@@ -4164,6 +4203,29 @@ export async function vaultHealthCheck() {
 /** Entity vault folder */
 export const ENTITIES_DIR = "entities";
 
+/** Last entity vault I/O — Audit panel surfaces failures instead of silent empty. */
+let lastEntityIo = {
+  ok: true,
+  op: null,
+  error: null,
+  path: null,
+  count: null,
+  at: null,
+};
+
+export function getLastEntityIo() {
+  return { ...lastEntityIo };
+}
+
+function recordEntityIo(patch = {}) {
+  lastEntityIo = {
+    ...lastEntityIo,
+    ...patch,
+    at: new Date().toISOString(),
+  };
+  return lastEntityIo;
+}
+
 export { GLYPH_DICTIONARY_DIR };
 
 function parseGlyphMarkdown(text, relPath, kind) {
@@ -4235,12 +4297,16 @@ export function entityVaultPath(entityId) {
  */
 export async function writeEntityToVault(entity) {
   const e = normalizeEntity(entity);
+  const path = entityVaultPath(e.id);
+  console.debug("[entity-write] start", { id: e.id, name: e.name, path, type: e.type });
   const handle = dirHandle || (await restoreIntelligenceFolder());
   if (!handle || !hasDirectoryPicker()) {
-    return { ok: false, error: "no vault linked" };
+    const error = "no vault linked";
+    console.error("[entity-error] write", { path, error });
+    recordEntityIo({ ok: false, op: "write", error, path, count: null });
+    return { ok: false, error };
   }
 
-  const path = entityVaultPath(e.id);
   const parts = path.split("/");
   let dir = handle;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -4253,9 +4319,14 @@ export async function writeEntityToVault(entity) {
     const md = buildEntityMarkdown(e);
     await w.write(md);
     await w.close();
-    return { ok: true, method: "file-system", path };
+    console.debug("[entity-write] ok", { path, bytes: md.length, domains: Object.keys(e.facts || {}) });
+    recordEntityIo({ ok: true, op: "write", error: null, path, count: 1 });
+    return { ok: true, method: "file-system", path, bytes: md.length };
   } catch (err) {
-    return { ok: false, error: String(err?.message || err) };
+    const error = String(err?.message || err);
+    console.error("[entity-error] write", { path, error });
+    recordEntityIo({ ok: false, op: "write", error, path, count: null });
+    return { ok: false, error };
   }
 }
 
@@ -4263,8 +4334,14 @@ export async function writeEntityToVault(entity) {
  * Read all entity files from vault.
  */
 export async function readAllEntitiesFromVault() {
+  console.debug("[entity-read] start");
   const handle = dirHandle || (await restoreIntelligenceFolder());
-  if (!handle || !hasDirectoryPicker()) return [];
+  if (!handle || !hasDirectoryPicker()) {
+    const error = "no vault linked";
+    console.error("[entity-error] read", { error });
+    recordEntityIo({ ok: false, op: "read", error, path: ENTITIES_DIR, count: 0 });
+    return [];
+  }
 
   const entries = [];
   try {
@@ -4275,15 +4352,26 @@ export async function readAllEntitiesFromVault() {
         const text = await readExistingFocusText(fileHandle);
         const ent = parseEntityMarkdown(text);
         if (ent && ent.id) entries.push(ent);
-      } catch {
-        /* skip unreadable */
+      } catch (err) {
+        console.error("[entity-error] read file", { name, error: String(err?.message || err) });
       }
     }
-  } catch {
-    /* no entities folder yet */
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (/not found|does not exist|NotFoundError/i.test(msg)) {
+      console.debug("[entity-read] no entities folder yet");
+      recordEntityIo({ ok: true, op: "read", error: null, path: ENTITIES_DIR, count: 0 });
+      return [];
+    }
+    console.error("[entity-error] read", { error: msg });
+    recordEntityIo({ ok: false, op: "read", error: msg, path: ENTITIES_DIR, count: 0 });
+    return [];
   }
 
-  return entries.sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
+  entries.sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
+  console.debug("[entity-read] ok", { count: entries.length });
+  recordEntityIo({ ok: true, op: "read", error: null, path: ENTITIES_DIR, count: entries.length });
+  return entries;
 }
 
 /**
@@ -4422,8 +4510,19 @@ export async function autoCaptureEntitiesFromText(text, opts = {}) {
       related_focuses: focusId ? [focusId] : [],
       certainty: "inferred",
     });
-    if (result?.ok) captured.push({ ...ent, vaultPath: result.path });
+    if (result?.ok) {
+      captured.push({ ...ent, vaultPath: result.path });
+    } else {
+      console.error("[entity-error] auto-capture write failed", {
+        name: ent.name,
+        error: result?.error || "unknown",
+      });
+    }
   }
+  console.debug("[entity-write] auto-capture done", {
+    candidates: candidates.length,
+    captured: captured.length,
+  });
   return { captured: captured.length, entities: captured };
 }
 
