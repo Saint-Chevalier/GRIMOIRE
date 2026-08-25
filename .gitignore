@@ -27,10 +27,15 @@ backups/
 focus-state-pre-reset-*.json
 .grimoire-vault
 
+# Node registry / API secrets (Directive 011 — vault only)
+**/nodes/registry.json
+**/nodes/secrets/
+
 # Local-only runtime dumps
 *.local.md
 private/
 secrets/
+tools/_nodes-011-import.mjs
 
 # OS
 Desktop.ini

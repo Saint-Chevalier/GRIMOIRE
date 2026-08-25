@@ -19,6 +19,8 @@ const BLOCK = [
   /(^|\/)\.env(\.|$)/,
   /\.pem$/i,
   /\.key$/i,
+  /(^|\/)nodes\/registry\.json$/i,
+  /(^|\/)nodes\/secrets(\/|$)/i,
 ];
 
 export function isBlockedVaultPath(file) {

@@ -19,7 +19,7 @@ jobs:
           set -e
           echo "[vault-guard] scanning tracked files…"
           # Path segments only — do not match public tools named *grok-build-daskw*.
-          HITS=$(git ls-files | grep -Ei '(^|/)GRIMOIRE-FocusIntelligence(/|$)|(^|/)FocusIntelligence(/|$)|(^|/)grok-build-daskw(/|$)|(^|/)pending-review(/|$)|focus-state-pre-reset|(^|/)\.env($|\.)|\.pem$|\.key$' || true)
+          HITS=$(git ls-files | grep -Ei '(^|/)GRIMOIRE-FocusIntelligence(/|$)|(^|/)FocusIntelligence(/|$)|(^|/)grok-build-daskw(/|$)|(^|/)pending-review(/|$)|focus-state-pre-reset|(^|/)\.env($|\.)|\.pem$|\.key$|(^|/)nodes/registry\.json$|(^|/)nodes/secrets(/|$)' || true)
           if [ -n "$HITS" ]; then
             echo "[vault-guard] BLOCKED tracked private paths:"
             echo "$HITS"

@@ -43,6 +43,23 @@ import {
   VAULT_HANDLE_IDB_KEY,
   VAULT_HEALTH,
 } from "./data.js";
+import {
+  NODE_REGISTRY_PATH,
+  NODE_SECRETS_DIR,
+  getNodeRegistry,
+  setNodeRegistry,
+  seedDefaultNodes,
+  getNodeById,
+  updateNode,
+  publicNodeView,
+  registryForVault,
+  buildHttpDispatchPayload,
+  parseHttpDispatchReply,
+  resolveHttpEndpoint,
+  httpAuthStyle,
+  validateCapturedReply,
+  normalizeSpellTarget,
+} from "./nodes.js";
 import { computeFocusHealth } from "./health.js";
 
 /** In-memory bus activity (BRAIN bus log) — append-only, capped */
@@ -4248,6 +4265,7 @@ export async function auditVaultIntelligence(opts = {}) {
       entities: [],
       experiences: [],
       scrollNodes: [],
+      nodes: [],
       busActivity: [],
       glyphs: [],
       entityIo: getLastEntityIo(),
@@ -4297,6 +4315,7 @@ export async function auditVaultIntelligence(opts = {}) {
         result.glyphs = await readGlyphsFromVault();
         result.busActivity = getBusActivityLog().slice(-20);
         result.scrollNodes = buildScrollNodesFromConversations();
+        result.nodes = (getNodeRegistry()?.nodes || []).map((n) => publicNodeView(n));
         result.entityIo = getLastEntityIo();
       })(),
       timeoutMs,
@@ -4894,4 +4913,327 @@ export async function autoCaptureNodeIntelFromText(text, opts = {}) {
     if (result?.ok) captured.push({ ...node, vaultPath: result.path });
   }
   return { captured: captured.length, nodes: captured };
+}
+
+// ─── Directive 011 — vault node registry + dispatch ───
+
+async function vaultRootHandle() {
+  return dirHandle || (await restoreIntelligenceFolder());
+}
+
+async function writeVaultTextFile(relPath, text) {
+  const root = await vaultRootHandle();
+  if (!root) throw new Error("Vault unlinked — click 📁 to restore");
+  const parts = String(relPath)
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+  let dir = root;
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i], { create: true });
+  }
+  const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+  const w = await fh.createWritable();
+  await w.write(String(text || ""));
+  await w.close();
+  return relPath;
+}
+
+async function readVaultTextFile(relPath) {
+  const root = await vaultRootHandle();
+  if (!root) return null;
+  const parts = String(relPath)
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+  let dir = root;
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i], { create: false });
+  }
+  const fh = await dir.getFileHandle(parts[parts.length - 1], { create: false });
+  const file = await fh.getFile();
+  return await file.text();
+}
+
+export async function saveNodeRegistry(registry) {
+  if (registry) setNodeRegistry(registry);
+  const payload = JSON.stringify(registryForVault(), null, 2);
+  try {
+    await writeVaultTextFile(NODE_REGISTRY_PATH, payload);
+  } catch (err) {
+    console.warn("[nodes] vault save failed — memory only", err?.message || err);
+    return { ok: false, method: "memory", error: String(err?.message || err) };
+  }
+  return { ok: true, method: "vault", path: NODE_REGISTRY_PATH };
+}
+
+export async function loadNodeRegistry() {
+  try {
+    const raw = await readVaultTextFile(NODE_REGISTRY_PATH);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      setNodeRegistry(parsed);
+      console.debug("[nodes] registry loaded", { count: getNodeRegistry().nodes.length });
+      return getNodeRegistry();
+    }
+  } catch (err) {
+    if (err?.name !== "NotFoundError") {
+      console.warn("[nodes] registry read", err?.message || err);
+    }
+  }
+  setNodeRegistry({ version: 1, nodes: seedDefaultNodes() });
+  try {
+    await saveNodeRegistry();
+  } catch {
+    /* memory fallback */
+  }
+  return getNodeRegistry();
+}
+
+function secretRelPath(nodeId) {
+  const id = String(nodeId || "").replace(/[^a-zA-Z0-9._-]/g, "") || "node";
+  return `${NODE_SECRETS_DIR}/${id}.key`;
+}
+
+export async function writeNodeSecret(nodeId, apiKey) {
+  const key = String(apiKey || "").trim();
+  if (!nodeId) throw new Error("node id required");
+  if (!key) {
+    try {
+      const node = getNodeById(nodeId);
+      if (node) updateNode(nodeId, { has_api_key: false, api_key_ref: null });
+    } catch {
+      /* ignore */
+    }
+    return { ok: true, cleared: true };
+  }
+  const path = secretRelPath(nodeId);
+  await writeVaultTextFile(path, key);
+  updateNode(nodeId, { has_api_key: true, api_key_ref: path });
+  await saveNodeRegistry();
+  return { ok: true, path };
+}
+
+export async function readNodeSecret(nodeId) {
+  const node = getNodeById(nodeId);
+  const path = node?.api_key_ref || secretRelPath(nodeId);
+  try {
+    const raw = await readVaultTextFile(path);
+    return raw ? String(raw).trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+async function writeClipboardText(text) {
+  const value = String(text || "");
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  throw new Error("Clipboard API unavailable");
+}
+
+async function readClipboardText() {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+    return await navigator.clipboard.readText();
+  }
+  throw new Error("Clipboard API unavailable");
+}
+
+export async function dispatchSpellToClipboard(spell, node) {
+  try {
+    const text = formatSpellMarkdown(spell);
+    await writeClipboardText(text);
+    console.debug("[dispatch] copy", { node: node?.name || "", bytes: text.length });
+    if (node?.id) {
+      try {
+        updateNode(node.id, {
+          last_used: new Date().toISOString().slice(0, 10),
+          spells_sent: (Number(node.spells_sent) || 0) + 1,
+        });
+        await saveNodeRegistry();
+      } catch {
+        /* ignore stats */
+      }
+    }
+    pushBusActivity({
+      kind: "dispatch",
+      summary: `Spell copied → ${node?.name || "clipboard"}`,
+      nodeName: node?.name || "",
+      channel: node?.dispatch_protocol || "clipboard",
+      localOnly: true,
+    });
+    return { ok: true, protocol: "clipboard", node: publicNodeView(node), bytes: text.length };
+  } catch (err) {
+    console.debug("[dispatch] error", { stage: "copy", message: String(err?.message || err) });
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
+export async function captureReplyFromClipboard(spellId, spell) {
+  try {
+    const text = await readClipboardText();
+    console.debug("[dispatch] paste", { bytes: String(text || "").length, spellId: spellId || "" });
+    const check = validateCapturedReply(text, spell);
+    if (!check.ok) {
+      console.debug("[dispatch] error", { stage: "paste", reason: check.reason });
+      return check;
+    }
+    try {
+      await writeExperienceToVault(
+        createEmptyExperience({
+          title: `Reply · ${spell?.targetNode?.node_name || spell?.target || "node"}`,
+          summary: check.reply.slice(0, 240),
+          what_happened: check.reply.slice(0, 8000),
+          outcome: "captured from clipboard",
+          tags: ["spell-reply", "dispatch", spellId || ""].filter(Boolean),
+          related_focuses: spell?.conversationId ? [spell.conversationId] : [],
+        })
+      );
+    } catch (err) {
+      console.warn("[dispatch] experience write", err?.message || err);
+    }
+    const nodeId = spell?.targetNode?.node_id;
+    if (nodeId && getNodeById(nodeId)) {
+      const n = getNodeById(nodeId);
+      updateNode(nodeId, { replies_received: (Number(n.replies_received) || 0) + 1 });
+      await saveNodeRegistry();
+    }
+    pushBusActivity({
+      kind: "dispatch-reply",
+      summary: `Reply captured from clipboard`,
+      nodeName: spell?.targetNode?.node_name || "",
+      channel: "clipboard",
+      localOnly: true,
+    });
+    return { ok: true, reply: check.reply };
+  } catch (err) {
+    console.debug("[dispatch] error", { stage: "paste", message: String(err?.message || err) });
+    return { ok: false, reason: "clipboard", error: String(err?.message || err) };
+  }
+}
+
+export async function dispatchSpellToHTTP(spell, node) {
+  const target = node || getNodeById(spell?.targetNode?.node_id);
+  if (!target) return { ok: false, error: "No target node" };
+  const url = resolveHttpEndpoint(target);
+  if (!url) return { ok: false, error: "Node has no endpoint" };
+  console.debug("[dispatch] http send", { node: target.name, endpoint: target.endpoint, model: target.model });
+  try {
+    const key = await readNodeSecret(target.id);
+    const headers = { "Content-Type": "application/json" };
+    const style = httpAuthStyle(target);
+    if (style === "anthropic") {
+      if (!key) return { ok: false, error: "API key missing in vault" };
+      headers["x-api-key"] = key;
+      headers["anthropic-version"] = "2023-06-01";
+    } else if (style !== "local" || key) {
+      if (!key && style === "bearer") return { ok: false, error: "API key missing in vault" };
+      if (key) headers.Authorization = `Bearer ${key}`;
+    }
+    const payload = buildHttpDispatchPayload(spell, target);
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    const rawText = await res.text();
+    let data = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      data = { response: rawText };
+    }
+    if (!res.ok) {
+      const msg =
+        res.status === 401 || res.status === 403
+          ? "Auth failed — check vault API key"
+          : res.status === 429
+            ? "Rate limited"
+            : `HTTP ${res.status}`;
+      console.debug("[dispatch] http error", { status: res.status, node: target.name });
+      return { ok: false, error: msg, status: res.status };
+    }
+    const reply = parseHttpDispatchReply(data);
+    console.debug("[dispatch] http receive", { node: target.name, bytes: reply.length });
+    if (!reply) return { ok: false, error: "Empty model reply" };
+    try {
+      await writeExperienceToVault(
+        createEmptyExperience({
+          title: `HTTP reply · ${target.name}`,
+          summary: reply.slice(0, 240),
+          what_happened: reply.slice(0, 8000),
+          outcome: "captured from HTTP",
+          tags: ["spell-reply", "http", target.id],
+          related_focuses: spell?.conversationId ? [spell.conversationId] : [],
+        })
+      );
+    } catch (err) {
+      console.warn("[dispatch] experience write", err?.message || err);
+    }
+    updateNode(target.id, {
+      last_used: new Date().toISOString().slice(0, 10),
+      spells_sent: (Number(target.spells_sent) || 0) + 1,
+      replies_received: (Number(target.replies_received) || 0) + 1,
+      status: "active",
+    });
+    await saveNodeRegistry();
+    pushBusActivity({
+      kind: "dispatch",
+      summary: `HTTP spell → ${target.name}`,
+      nodeName: target.name,
+      channel: "http",
+      localOnly: true,
+    });
+    return { ok: true, protocol: "http", reply, node: publicNodeView(target) };
+  } catch (err) {
+    const message = String(err?.message || err);
+    const cors = /failed to fetch|cors|networkerror/i.test(message);
+    console.debug("[dispatch] http error", { node: target.name, cors, message: cors ? "network/cors" : "request-failed" });
+    return {
+      ok: false,
+      error: cors
+        ? "Browser blocked the request (CORS). Use a local endpoint or clipboard dispatch."
+        : message,
+    };
+  }
+}
+
+export async function testNodeConnection(node) {
+  const target = typeof node === "string" ? getNodeById(node) : node;
+  if (!target) return { ok: false, error: "Node not found" };
+  if (target.dispatch_protocol === "clipboard" || target.type === "cli") {
+    return { ok: true, method: "clipboard", detail: "CLI node — no HTTP ping; use Copy Spell" };
+  }
+  const url = resolveHttpEndpoint(target);
+  if (!url) return { ok: false, error: "No endpoint" };
+  const pingSpell = {
+    content: "Reply with the single word PONG.",
+    context: "connection test",
+    subtitle: "ping",
+  };
+  const result = await dispatchSpellToHTTP(pingSpell, target);
+  if (result.ok) {
+    try {
+      updateNode(target.id, { status: "active" });
+      await saveNodeRegistry();
+    } catch {
+      /* ignore */
+    }
+  } else {
+    try {
+      updateNode(target.id, { status: "error" });
+      await saveNodeRegistry();
+    } catch {
+      /* ignore */
+    }
+  }
+  return result;
+}
+
+export function resolveSpellDispatchNode(spell) {
+  const t = normalizeSpellTarget(spell?.targetNode || spell?.target);
+  if (t?.node_id) return getNodeById(t.node_id);
+  return null;
 }

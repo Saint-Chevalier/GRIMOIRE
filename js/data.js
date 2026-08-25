@@ -5,6 +5,44 @@
  * GBG: Grimoire Builds Grimoire — every turn can forge better spells.
  */
 
+export {
+  NODE_TYPES,
+  DISPATCH_PROTOCOLS,
+  NODE_STATUSES,
+  NODE_REGISTRY_PATH,
+  NODE_SECRETS_DIR,
+  defaultDispatchProtocol,
+  makeNodeId,
+  publicNodeView,
+  normalizeNode,
+  seedDefaultNodes,
+  getNodeRegistry,
+  setNodeRegistry,
+  loadNodeRegistry,
+  saveNodeRegistry,
+  getActiveNodes,
+  getNodeById,
+  createNode,
+  updateNode,
+  deleteNode,
+  normalizeSpellTarget,
+  spellHasNodeTarget,
+  spellTargetLabel,
+  assignSpellTarget,
+  validateCapturedReply,
+  httpAuthStyle,
+  resolveHttpEndpoint,
+  buildHttpDispatchPayload,
+  parseHttpDispatchReply,
+  registryForVault,
+} from "./nodes.js";
+import {
+  getActiveNodes,
+  normalizeSpellTarget,
+  assignSpellTarget,
+  spellTargetLabel,
+} from "./nodes.js";
+
 /** Entity type classifier */
 export const FOCUS_TYPES = ["person", "place", "thing", "ai", "idea", "network"];
 
@@ -1281,8 +1319,23 @@ export function normalizeSpell(spell) {
   }
   if (!spell.essence && spell.subtitle) spell.essence = spell.subtitle;
 
-  // Target
-  if (!spell.target) spell.target = "Focus";
+  // Target — structured node ref (Directive 011) + legacy string
+  const selfish =
+    spell.kind === "self-cast" ||
+    (typeof spellLooksSelfRecursive === "function" && spellLooksSelfRecursive(spell));
+  if (spell.targetNode || spell.target_node) {
+    spell.targetNode = normalizeSpellTarget(spell.targetNode || spell.target_node);
+  }
+  if (!selfish && !spell.targetNode?.node_id) {
+    const nodes = getActiveNodes();
+    const pick = nodes.find((n) => n.id === "node-grok-build") || nodes[0];
+    if (pick) assignSpellTarget(spell, pick);
+  }
+  if (spell.targetNode?.node_name) {
+    spell.target = spell.targetNode.node_name;
+  } else if (!spell.target) {
+    spell.target = "Focus";
+  }
 
   // Iteration / version
   let iter = Number(spell.iteration || spell.version || 0);
@@ -1659,8 +1712,12 @@ export function refreshBreathingStatus(convo, now = Date.now()) {
 export function ensureFleetSpellFields(spell) {
   if (!spell || typeof spell !== "object") return spell;
 
-  // target already normalized above; keep string
-  spell.target = String(spell.target || "Focus").trim() || "Focus";
+  if (spell.targetNode) {
+    spell.targetNode = normalizeSpellTarget(spell.targetNode);
+    spell.target = spellTargetLabel(spell) || String(spell.target || "Focus").trim() || "Focus";
+  } else {
+    spell.target = String(spell.target || "Focus").trim() || "Focus";
+  }
 
   // linkedSession for delivery (may inherit from focus at cast time)
   if (spell.linkedSession == null) {
@@ -2258,6 +2315,7 @@ export function formatSpellMarkdown(spell) {
   const lines = [
     `# SPELL — ${String(target).toUpperCase()}: ${title}`,
     `**To:** ${target}`,
+    s.targetNode?.node_id ? `**Node:** ${s.targetNode.node_name} (${s.targetNode.node_type} · ${s.targetNode.dispatch_protocol})` : null,
     s.medium ? `**Channel:** ${s.medium}` : null,
     s.from ? `**From:** ${s.from}` : null,
     s.subtitle || s.essence ? `**Intent:** ${s.subtitle || s.essence}` : null,
@@ -6607,7 +6665,7 @@ export async function buildSpellCrafterContext(convo) {
   let experiences = [];
   let nodes = [];
   try {
-    const intel = await import("./intelligence.js?v=exec-009");
+    const intel = await import("./intelligence.js?v=exec-011");
     if (typeof intel.readAllEntitiesFromVault === "function") {
       entities = (await intel.readAllEntitiesFromVault()) || [];
     }

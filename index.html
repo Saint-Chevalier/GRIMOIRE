@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-009" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-009" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-011" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-011" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -320,6 +320,7 @@
         <button type="button" class="intel-audit-tab" data-tab="experiences" id="tab-audit-experiences">Experiences</button>
         <button type="button" class="intel-audit-tab" data-tab="focuses" id="tab-audit-focuses">Focuses</button>
         <button type="button" class="intel-audit-tab" data-tab="scroll" id="tab-audit-scroll">Scroll Nodes</button>
+        <button type="button" class="intel-audit-tab" data-tab="nodes" id="tab-audit-nodes">Nodes</button>
         <button type="button" class="intel-audit-tab" data-tab="bus" id="tab-audit-bus">Bus Activity</button>
         <button type="button" class="intel-audit-tab" data-tab="timeline" id="tab-audit-timeline">Timeline</button>
         <button type="button" class="intel-audit-tab" data-tab="glyphs" id="tab-audit-glyphs">Glyphs</button>
@@ -339,6 +340,9 @@
         </div>
         <div class="intel-audit-tab-panel" data-panel="scroll" id="panel-audit-scroll" hidden>
           <div class="intel-audit-empty">Loading scroll nodes…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="nodes" id="panel-audit-nodes" hidden>
+          <div class="intel-audit-empty">Loading dispatch nodes…</div>
         </div>
         <div class="intel-audit-tab-panel" data-panel="bus" id="panel-audit-bus" hidden>
           <div class="intel-audit-empty">Loading bus activity…</div>
@@ -614,6 +618,7 @@
         <div class="settings-tabs" role="tablist" aria-label="Settings sections">
           <button type="button" class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
           <button type="button" class="settings-tab" data-settings-tab="spells" role="tab" aria-selected="false">Spells</button>
+          <button type="button" class="settings-tab" data-settings-tab="nodes" role="tab" aria-selected="false">Nodes</button>
           <button type="button" class="settings-tab" data-settings-tab="tabs" role="tab" aria-selected="false">Tabs</button>
           <button type="button" class="settings-tab" data-settings-tab="roadmap" role="tab" aria-selected="false">Roadmap</button>
         </div>
@@ -655,6 +660,49 @@
             <input id="settings-auto-forge" type="checkbox" />
             Auto-forge on clear intent
           </label>
+        </div>
+        <div class="settings-tab-panel" data-settings-panel="nodes" role="tabpanel" hidden>
+          <p class="settings-hint">AI endpoints. API keys stay in the vault — never localStorage or git.</p>
+          <div id="settings-nodes-list" class="settings-nodes-list"></div>
+          <p class="settings-hint" id="settings-nodes-empty" hidden>No nodes configured. Add a node in Settings → Nodes.</p>
+          <button type="button" class="btn-secondary" id="btn-node-add">Add Node</button>
+          <form id="settings-node-form" class="settings-node-form">
+            <label>Name (required)
+              <input id="node-form-name" type="text" required autocomplete="off" placeholder="Grok Build" />
+            </label>
+            <label>Type
+              <select id="node-form-type">
+                <option value="cli">cli</option>
+                <option value="api">api</option>
+                <option value="local">local</option>
+                <option value="discord">discord</option>
+                <option value="telegram">telegram</option>
+              </select>
+            </label>
+            <label>Model / OS
+              <input id="node-form-model" type="text" autocomplete="off" placeholder="grok, claude, llama3…" />
+            </label>
+            <label id="node-form-endpoint-wrap" hidden>Endpoint
+              <input id="node-form-endpoint" type="url" autocomplete="off" placeholder="https://api.openai.com" />
+            </label>
+            <label>Dispatch protocol
+              <select id="node-form-protocol">
+                <option value="clipboard">clipboard</option>
+                <option value="http">http</option>
+              </select>
+            </label>
+            <label id="node-form-key-wrap" hidden>API key (vault only, masked)
+              <input id="node-form-key" type="password" autocomplete="new-password" placeholder="Vault only — never localStorage" />
+            </label>
+            <label>Notes
+              <input id="node-form-notes" type="text" autocomplete="off" />
+            </label>
+            <label class="settings-check">
+              <input id="node-form-auto-capture" type="checkbox" />
+              Auto-capture HTTP replies
+            </label>
+            <button type="submit" class="btn-primary">Save node</button>
+          </form>
         </div>
         <div class="settings-tab-panel" data-settings-panel="tabs" role="tabpanel" hidden>
           <p class="settings-hint">Reserved upgrade surface. Tab switching works; no settings here yet (Directive 004).</p>
@@ -760,7 +808,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-009"></script>
+  <script type="module" src="js/app.js?v=exec-011"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1100,8 +1148,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-009");
-          const intelMod = await import("./js/intelligence.js?v=exec-009");
+          const dataMod = await import("./js/data.js?v=exec-011");
+          const intelMod = await import("./js/intelligence.js?v=exec-011");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1337,13 +1385,14 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-009");
+          const intelMod = await import("./js/intelligence.js?v=exec-011");
           const audit = Object.assign(
             {
               focuses: [],
               entities: [],
               experiences: [],
               scrollNodes: [],
+              nodes: [],
               busActivity: [],
               glyphs: [],
             },
@@ -1370,6 +1419,7 @@
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.focuses.length}</span><span class="intel-audit-metric-label">Focuses</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.experiences.length}</span><span class="intel-audit-metric-label">Experiences</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.scrollNodes.length}</span><span class="intel-audit-metric-label">Scroll Nodes</span></div>
+                  <div class="intel-audit-metric"><span class="intel-audit-metric-value">${(audit.nodes || []).length}</span><span class="intel-audit-metric-label">Dispatch Nodes</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.entities?.length || 0}</span><span class="intel-audit-metric-label">Entities</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.busActivity.length}</span><span class="intel-audit-metric-label">Bus Events</span></div>
                   <div class="intel-audit-metric"><span class="intel-audit-metric-value">${audit.glyphs?.length || 0}</span><span class="intel-audit-metric-label">Glyphs</span></div>
@@ -1409,6 +1459,26 @@
                   <div class="experience-item-meta">${f.path}</div>
                 </div>
               `).join("");
+            }
+          }
+
+          const nodeList = document.getElementById("panel-audit-nodes");
+          if (nodeList) {
+            const nodes = audit.nodes || [];
+            if (!nodes.length) {
+              nodeList.innerHTML = '<div class="intel-audit-empty">No dispatch nodes yet. Add one in Settings → Nodes.</div>';
+            } else {
+              nodeList.innerHTML = nodes.map(function (n) {
+                return (
+                  '<div class="experience-item">' +
+                  '<div class="experience-item-title">' + (n.name || n.id || "Unnamed") + "</div>" +
+                  '<div class="experience-item-meta">' +
+                  (n.type || "node") + " · " + (n.status || "") + " · " + (n.dispatch_protocol || "") +
+                  " · sent " + (n.spells_sent || 0) +
+                  " · replies " + (n.replies_received || 0) +
+                  "</div></div>"
+                );
+              }).join("");
             }
           }
 

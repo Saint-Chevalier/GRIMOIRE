@@ -23,6 +23,16 @@ import {
   applyFocusClassification,
   VAULT_HEALTH,
   vaultStatusLabel,
+  getActiveNodes,
+  getNodeById,
+  getNodeRegistry,
+  createNode,
+  updateNode,
+  deleteNode,
+  assignSpellTarget,
+  spellHasNodeTarget,
+  NODE_TYPES,
+  defaultDispatchProtocol,
   DEFAULT_FOCUS_FOLDERS,
   ensureFocusOrgFields,
   focusExists,
@@ -159,13 +169,13 @@ import {
   evaluateSpellConditions,
   normalizeSpellConditions,
   ENTITY_RELATIONS,
-} from "./data.js?v=exec-009";
+} from "./data.js?v=exec-011";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-009";
+} from "./stars.js?v=exec-011";
 import {
   initUniverse,
   setFocusUniverse,
@@ -173,7 +183,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-009";
+} from "./universe.js?v=exec-011";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -246,19 +256,27 @@ import {
   addEntityRelationship,
   removeEntityRelationship,
   detectRelationshipsFromText,
-} from "./intelligence.js?v=exec-009";
+  loadNodeRegistry as loadNodeRegistryFromVault,
+  saveNodeRegistry as persistNodeRegistry,
+  dispatchSpellToClipboard,
+  captureReplyFromClipboard,
+  dispatchSpellToHTTP,
+  testNodeConnection,
+  writeNodeSecret,
+  resolveSpellDispatchNode,
+} from "./intelligence.js?v=exec-011";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-009";
+} from "./health.js?v=exec-011";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-009";
+} from "./pulse.js?v=exec-011";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -3255,8 +3273,47 @@ function takePendingImagesForSend() {
 
 /** Safe target name chip for spell cards (spell.target = Focus / node name). */
 function spellTargetBadge(spell) {
-  if (!spell || !spell.target) return "";
-  return escapeHtml(String(spell.target));
+  if (!spell) return "";
+  const label = spell.targetNode?.node_name || spell.target;
+  if (!label) return "";
+  return escapeHtml(String(label));
+}
+
+function spellDispatchBarHtml(spell, convo) {
+  if (!spell) return "";
+  const isHist =
+    spellIsSealed(spell) ||
+    spell.status === "history" ||
+    spell.status === "sent" ||
+    spell.status === "archived";
+  const nodes = getActiveNodes();
+  const currentId = spell.targetNode?.node_id || "";
+  if (!nodes.length) {
+    return `<div class="spell-dispatch-bar"><p class="spell-dispatch-empty">No nodes configured. Add a node in Settings → Nodes.</p></div>`;
+  }
+  const opts = nodes
+    .map(
+      (n) =>
+        `<option value="${escapeAttr(n.id)}"${n.id === currentId ? " selected" : ""}>${escapeHtml(
+          n.name
+        )} · ${escapeHtml(n.type)}</option>`
+    )
+    .join("");
+  const node = resolveSpellDispatchNode(spell) || getNodeById(currentId);
+  const protocol = node?.dispatch_protocol || "clipboard";
+  const sendBtn =
+    !isHist && protocol === "http"
+      ? `<button type="button" class="btn-spell" data-action="dispatch-http" title="Send spell to API node">Send Spell</button>`
+      : !isHist
+        ? `<button type="button" class="btn-spell" data-action="dispatch-copy" title="Copy spell for this node">Copy Spell</button>`
+        : "";
+  const pasteBtn = `<button type="button" class="btn-spell" data-action="dispatch-paste" title="Read reply from clipboard">Paste Reply</button>`;
+  return `<div class="spell-dispatch-bar">
+    <label class="spell-node-select-label">Target
+      <select class="spell-node-select" data-action="spell-target-node" title="Dispatch node">${opts}</select>
+    </label>
+    <div class="spell-dispatch-actions">${sendBtn}${pasteBtn}</div>
+  </div>`;
 }
 
 /**
@@ -3458,6 +3515,7 @@ async function renderSpells() {
             : ""
         }
         ${spellCardFaceHtml(spell, owner)}
+        ${spellDispatchBarHtml(spell, owner)}
         ${spellCardSendActionsHtml(spell, owner)}
       `;
       wireSpellCardActions(item, spell, {
@@ -3829,6 +3887,29 @@ function wireSpellCardActions(item, spell, { sealOnCopy, convo }) {
       void manualSendSpellToSession(spell, { source: "operator" });
     });
   });
+  item.querySelector('[data-action="spell-target-node"]')?.addEventListener("change", (e) => {
+    e.stopPropagation();
+    const node = getNodeById(e.target.value);
+    if (!node) {
+      toast("No nodes configured. Add a node in Settings → Nodes.", "");
+      return;
+    }
+    assignSpellTarget(spell, node);
+    persist();
+    void renderSpells();
+  });
+  item.querySelector('[data-action="dispatch-copy"]')?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void copySpell(spell.id, { seal: false, awaitReply: true });
+  });
+  item.querySelector('[data-action="dispatch-http"]')?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void sendSpellViaHttp(spell.id);
+  });
+  item.querySelector('[data-action="dispatch-paste"]')?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void pasteSpellReply(spell.id);
+  });
 
   const openDetail = (event) => {
     if (event?.target?.closest?.("button, a, input, textarea")) return;
@@ -3922,6 +4003,10 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
 
   const dispatchRows = [
     kvRow("Name", target),
+    kvRow("Node", spell.targetNode?.node_name || target),
+    kvRow("Node type", spell.targetNode?.node_type || ""),
+    kvRow("Dispatch", spell.targetNode?.dispatch_protocol || ""),
+    kvRow("Last used", resolveSpellDispatchNode(spell)?.last_used || ""),
     kvRow("Channel", nodeChannel),
     kvRow("Model / medium", backend?.name || nodeChannel),
     kvRow("Intel path", intelPath),
@@ -10009,6 +10094,11 @@ async function bootstrapIntelligenceVault() {
       health.state === VAULT_HEALTH.LINKED
         ? health.handle
         : await ensureIntelligenceFolder({ forcePrompt: false });
+    try {
+      await loadNodeRegistryFromVault();
+    } catch (err) {
+      console.warn("[nodes] boot registry", err);
+    }
     await refreshIntelFolderUi();
 
     const cell2 = ensureCell2CoreFocus(state);
@@ -10537,18 +10627,33 @@ async function copySpell(id, { seal = true, awaitReply = false } = {}) {
   const spell = state.spells.find((s) => s.id === id);
   if (!spell) return;
   normalizeSpell(spell);
-  const md = formatSpellMarkdown(spell);
-  try {
-    await navigator.clipboard.writeText(md);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = md;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
+  const self = shouldShowSelfCastButton(spell, resolveSpellFocus(spell));
+  const node = resolveSpellDispatchNode(spell);
+  if (!self && !spellHasNodeTarget(spell) && !node) {
+    toast("Spell has no target. Assign a node before casting.", "");
+    return;
+  }
+  if (node) {
+    const dispatched = await dispatchSpellToClipboard(spell, node);
+    if (!dispatched.ok) {
+      toast(dispatched.error || "Copy failed", "");
+      return;
+    }
+    toast(`Spell copied — paste into ${node.name}`, "success");
+  } else {
+    const md = formatSpellMarkdown(spell);
+    try {
+      await navigator.clipboard.writeText(md);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = md;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
   }
   spell.copiedAt = Date.now();
   // densen general spell targets onto derivedNodes on successful copy
@@ -10558,14 +10663,18 @@ async function copySpell(id, { seal = true, awaitReply = false } = {}) {
   // Preferred cast flow: copy → await paste reply → auto-seal (no immediate cast)
   if (awaitReply) {
     beginSpellAwaitReply(id);
-    const focus = state.conversations.find((c) => c.id === spell.conversationId);
-    const paste = spellPasteHint(spell, focus);
-    toast(
-      paste
-        ? `Copied — paste reply into chat to seal`
-        : "Copied — paste the AI reply into chat to seal",
-      "success"
-    );
+    persist();
+    void renderSpells();
+    if (!node) {
+      const focus = state.conversations.find((c) => c.id === spell.conversationId);
+      const paste = spellPasteHint(spell, focus);
+      toast(
+        paste
+          ? `Copied — paste reply into chat to seal`
+          : "Copied — paste the AI reply into chat to seal",
+        "success"
+      );
+    }
     return;
   }
 
@@ -10577,6 +10686,57 @@ async function copySpell(id, { seal = true, awaitReply = false } = {}) {
     void renderSpells();
     toast("Spell copied", "success");
   }
+}
+
+async function sendSpellViaHttp(id) {
+  const spell = state.spells.find((s) => s.id === id);
+  if (!spell) return;
+  normalizeSpell(spell);
+  const node = resolveSpellDispatchNode(spell);
+  if (!node) {
+    toast("Spell has no target. Assign a node before casting.", "");
+    return;
+  }
+  toast(`Sending to ${node.name}…`, "");
+  const result = await dispatchSpellToHTTP(spell, node);
+  if (!result.ok) {
+    toast(result.error || "HTTP dispatch failed", "");
+    return;
+  }
+  const convo = resolveSpellFocus(spell);
+  if (convo && result.reply) {
+    await handleAwaitPasteReply(convo, result.reply);
+  } else {
+    markSent(id, { fromCopy: false, silent: false });
+  }
+  toast(`Reply captured from ${node.name}`, "success");
+}
+
+async function pasteSpellReply(id) {
+  const spell = state.spells.find((s) => s.id === id);
+  if (!spell) return;
+  const captured = await captureReplyFromClipboard(id, spell);
+  if (!captured.ok) {
+    const why =
+      captured.reason === "empty"
+        ? "Clipboard is empty"
+        : captured.reason === "same-as-spell"
+          ? "Clipboard still has the spell — paste the reply first"
+          : captured.error || "Paste reply failed";
+    toast(why, "");
+    return;
+  }
+  const convo = resolveSpellFocus(spell);
+  if (convo) {
+    const handled = await handleAwaitPasteReply(convo, captured.reply);
+    if (!handled) {
+      spell.resultNote = captured.reply.slice(0, 500);
+      markSent(id, { silent: false });
+    }
+  } else {
+    markSent(id, { silent: false });
+  }
+  toast("Reply captured", "success");
 }
 
 function markSent(id, { fromCopy = false, fromSelfCast = false, silent = false } = {}) {
@@ -10902,7 +11062,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-009";
+window.__grimoireBootVersion = "exec-011";
 window.__selectFocusByName = function selectFocusByName(name) {
   const q = String(name || "").trim().toLowerCase();
   if (!q) return false;
@@ -11708,6 +11868,7 @@ els.btnSettingsOpenRoadmap?.addEventListener("click", () => {
 document.querySelectorAll("[data-settings-tab]").forEach((btn) => {
   btn.addEventListener("click", () => switchSettingsTab(btn.getAttribute("data-settings-tab")));
 });
+wireSettingsNodesUi();
 els.btnExportDossier?.addEventListener("click", () => {
   const id = activeConvo()?.id;
   if (id) void exportFocusDossier(id);
@@ -11768,6 +11929,175 @@ function switchSettingsTab(tab) {
     else panel.setAttribute("hidden", "");
   });
   if (name === "roadmap") renderSettingsRoadmapStatus();
+  if (name === "nodes") renderSettingsNodes();
+}
+
+function nodeTypeOptions(selected) {
+  return NODE_TYPES.map(
+    (t) => `<option value="${t}"${t === selected ? " selected" : ""}>${t}</option>`
+  ).join("");
+}
+
+function renderSettingsNodes() {
+  const list = document.getElementById("settings-nodes-list");
+  const empty = document.getElementById("settings-nodes-empty");
+  if (!list) return;
+  const nodes = getNodeRegistrySafe();
+  if (!nodes.length) {
+    list.innerHTML = "";
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = "No nodes configured. Add a node in Settings → Nodes.";
+    }
+    return;
+  }
+  if (empty) empty.hidden = true;
+  list.innerHTML = nodes
+    .map((n) => {
+      const last = n.last_used || "never";
+      return `<article class="settings-node-card" data-node-id="${escapeAttr(n.id)}">
+        <header>
+          <strong>${escapeHtml(n.name)}</strong>
+          <span class="settings-node-meta">${escapeHtml(n.type)} · ${escapeHtml(n.status)} · last ${escapeHtml(String(last))}</span>
+        </header>
+        <p class="settings-node-stats">${Number(n.spells_sent) || 0} sent · ${Number(n.replies_received) || 0} replies · ${escapeHtml(n.dispatch_protocol)}</p>
+        <div class="settings-node-actions">
+          <button type="button" class="btn-secondary btn-sm" data-node-edit="${escapeAttr(n.id)}">Edit</button>
+          <button type="button" class="btn-secondary btn-sm" data-node-test="${escapeAttr(n.id)}">Test</button>
+          <button type="button" class="btn-secondary btn-sm" data-node-delete="${escapeAttr(n.id)}">Delete</button>
+        </div>
+      </article>`;
+    })
+    .join("");
+  list.querySelectorAll("[data-node-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => fillNodeForm(btn.getAttribute("data-node-edit")));
+  });
+  list.querySelectorAll("[data-node-test]").forEach((btn) => {
+    btn.addEventListener("click", () => void testSettingsNode(btn.getAttribute("data-node-test")));
+  });
+  list.querySelectorAll("[data-node-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => void deleteSettingsNode(btn.getAttribute("data-node-delete")));
+  });
+}
+
+function getNodeRegistrySafe() {
+  try {
+    return getNodeRegistry()?.nodes || [];
+  } catch {
+    return [];
+  }
+}
+
+function fillNodeForm(id) {
+  const node = getNodeById(id);
+  const form = document.getElementById("settings-node-form");
+  if (!form) return;
+  form.dataset.nodeId = node?.id || "";
+  const set = (fid, val) => {
+    const el = document.getElementById(fid);
+    if (el) el.value = val ?? "";
+  };
+  set("node-form-name", node?.name || "");
+  set("node-form-type", node?.type || "cli");
+  set("node-form-model", node?.model || "");
+  set("node-form-endpoint", node?.endpoint || "");
+  set("node-form-protocol", node?.dispatch_protocol || defaultDispatchProtocol(node?.type || "cli"));
+  set("node-form-notes", node?.notes || "");
+  const auto = document.getElementById("node-form-auto-capture");
+  if (auto) auto.checked = Boolean(node?.auto_capture_replies);
+  const key = document.getElementById("node-form-key");
+  if (key) {
+    key.value = "";
+    key.placeholder = node?.has_api_key ? "•••• stored in vault" : "Vault only — never localStorage";
+  }
+  syncNodeFormProtocol();
+}
+
+function readNodeForm() {
+  const type = document.getElementById("node-form-type")?.value || "cli";
+  return {
+    name: document.getElementById("node-form-name")?.value || "",
+    type,
+    model: document.getElementById("node-form-model")?.value || "",
+    endpoint: document.getElementById("node-form-endpoint")?.value || "",
+    dispatch_protocol:
+      document.getElementById("node-form-protocol")?.value || defaultDispatchProtocol(type),
+    notes: document.getElementById("node-form-notes")?.value || "",
+    auto_capture_replies: Boolean(document.getElementById("node-form-auto-capture")?.checked),
+  };
+}
+
+function syncNodeFormProtocol() {
+  const type = document.getElementById("node-form-type")?.value || "cli";
+  const proto = document.getElementById("node-form-protocol");
+  if (proto && !proto.dataset.touched) proto.value = defaultDispatchProtocol(type);
+  const end = document.getElementById("node-form-endpoint-wrap");
+  const keyWrap = document.getElementById("node-form-key-wrap");
+  const needsHttp = type === "api" || type === "local";
+  if (end) end.hidden = !needsHttp;
+  if (keyWrap) keyWrap.hidden = !needsHttp;
+}
+
+async function saveSettingsNode(ev) {
+  ev?.preventDefault?.();
+  const form = document.getElementById("settings-node-form");
+  const editing = form?.dataset.nodeId || "";
+  const fields = readNodeForm();
+  try {
+    const node = editing ? updateNode(editing, fields) : createNode(fields);
+    const keyVal = String(document.getElementById("node-form-key")?.value || "").trim();
+    if (keyVal) {
+      await writeNodeSecret(node.id, keyVal);
+      const keyEl = document.getElementById("node-form-key");
+      if (keyEl) keyEl.value = "";
+    } else {
+      await persistNodeRegistry();
+    }
+    fillNodeForm("");
+    renderSettingsNodes();
+    toast(editing ? `Node updated: ${node.name}` : `Node added: ${node.name}`, "success");
+  } catch (err) {
+    toast(String(err?.message || err), "");
+  }
+}
+
+async function deleteSettingsNode(id) {
+  if (!id) return;
+  const node = getNodeById(id);
+  if (!node) return;
+  deleteNode(id);
+  await persistNodeRegistry();
+  fillNodeForm("");
+  renderSettingsNodes();
+  toast(`Deleted ${node.name}`, "success");
+}
+
+async function testSettingsNode(id) {
+  const node = getNodeById(id);
+  if (!node) return;
+  toast(`Testing ${node.name}…`, "");
+  const result = await testNodeConnection(node);
+  if (result.ok) toast(result.detail || `Connected: ${node.name}`, "success");
+  else toast(result.error || "Test failed", "");
+  renderSettingsNodes();
+}
+
+function wireSettingsNodesUi() {
+  document.getElementById("btn-node-add")?.addEventListener("click", () => {
+    fillNodeForm("");
+    document.getElementById("node-form-name")?.focus();
+  });
+  document.getElementById("settings-node-form")?.addEventListener("submit", (e) => {
+    void saveSettingsNode(e);
+  });
+  document.getElementById("node-form-type")?.addEventListener("change", () => {
+    const proto = document.getElementById("node-form-protocol");
+    if (proto) proto.dataset.touched = "";
+    syncNodeFormProtocol();
+  });
+  document.getElementById("node-form-protocol")?.addEventListener("change", (e) => {
+    e.target.dataset.touched = "1";
+  });
 }
 
 function renderSettingsRoadmapStatus() {

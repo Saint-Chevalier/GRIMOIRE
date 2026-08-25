@@ -17,6 +17,7 @@ const privateCases = [
   ["vault", "wrote to GRIMOIRE-FocusIntelligence/entities"],
   ["family", "my wife said the vault is ready"],
   ["doctrine", "kingdom doctrine requires silence"],
+  ["api-key", "secret sk-abcdefghijklmnopqrstuvwxyz012345"],
 ];
 for (const [name, text] of privateCases) {
   const r = screenDeltaIntelligence(text);

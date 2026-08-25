@@ -7,8 +7,9 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "node tools/test-security-protocol-008.mjs && node tools/verify-directive-009.mjs",
+    "test": "node tools/test-security-protocol-008.mjs && node tools/verify-directive-009.mjs && node tools/test-directive-011.mjs",
     "test:009": "node tools/verify-directive-009.mjs",
+    "test:011": "node tools/test-directive-011.mjs",
     "screen": "node tools/screen-delta-intelligence.mjs",
     "sanitize": "node tools/sanitize-public-doc.mjs",
     "vault-guard": "node tools/guard-vault-staged.mjs",

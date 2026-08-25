@@ -26,6 +26,8 @@ const RELATIONSHIP = /\b(?:my wife|my husband|my kids?|my daughter|my son|my fam
 const DOCTRINE = /\b(?:kingdom doctrine|cell[0-9] hermes|personal daskw|sealed doctrine)\b/i;
 const CONVO_DUMP = /\b(?:chat history|conversation log|alignment notes|experience overlay)\b/i;
 const STRATEGY = /\b(?:go-to-market secret|undisclosed revenue|private roadmap for the kingdom)\b/i;
+const API_KEY_TOKEN = /\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{16,}|xai-[A-Za-z0-9_-]{8,})\b/;
+const API_KEY_HEADER = /\b(?:authorization:\s*bearer\s+\S+|api[_-]?key\s*[:=]\s*['\"][^'\"]{8,})/i;
 
 function hit(tier, rule, match) {
   return { tier, rule, match: String(match || "").slice(0, 80) };
@@ -49,6 +51,8 @@ export function screenDeltaIntelligence(content, opts = {}) {
     [DOCTRINE, "PRIVATE", "kingdom-doctrine"],
     [CONVO_DUMP, "PRIVATE", "conversation-dump"],
     [STRATEGY, "PRIVATE", "private-strategy"],
+    [API_KEY_TOKEN, "PRIVATE", "api-key"],
+    [API_KEY_HEADER, "PRIVATE", "api-key-header"],
   ];
   for (const [re, tier, rule] of checks) {
     const m = text.match(re);
