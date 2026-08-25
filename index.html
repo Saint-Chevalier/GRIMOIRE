@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-005" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-005" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-007" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-007" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -57,17 +57,25 @@
         <div class="brand">
           <span class="brand-glyph" aria-hidden="true">✧</span>
           <div class="brand-text" id="brand-text">
-            <h1
-              class="brand-word"
-              id="brand-word"
-              role="button"
-              tabindex="0"
-              title="Open Intelligence Audit"
-              aria-label="Open Intelligence Audit"
-            >Grimoire</h1>
+            <div class="brand-menu-wrap">
+              <h1
+                class="brand-word"
+                id="brand-word"
+                role="button"
+                tabindex="0"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-controls="brand-menu"
+                title="Intelligence Audit and App Settings"
+                aria-label="Open Grimoire menu"
+              >Grimoire</h1>
+              <div id="brand-menu" class="brand-menu" hidden role="menu" aria-label="Grimoire">
+                <button type="button" class="brand-menu-item" role="menuitem" data-brand-open="audit">Intelligence Audit</button>
+                <button type="button" class="brand-menu-item" role="menuitem" data-brand-open="settings">App Settings</button>
+              </div>
+            </div>
             <p class="brand-sub">Constellation Codex</p>
           </div>
-          <button type="button" class="btn-app-settings-icon" id="btn-app-settings" title="App settings" aria-label="App settings">⚙</button>
         </div>
         <div class="vault-folder-btn-wrap" id="vault-folder-btn-wrap">
           <button type="button" class="btn-intel-folder" id="btn-intel-folder" title="Choose Intelligence Folder">
@@ -593,8 +601,9 @@
     </form>
   </dialog>
 
-  <!-- App settings / pages / roadmap anchor -->
-  <div id="app-settings-panel" class="settings-panel" hidden role="dialog" aria-label="App settings">
+  <!-- App settings — full-screen overlay (Directive 007) -->
+  <div id="app-settings-panel" class="settings-panel settings-overlay" hidden role="dialog" aria-modal="true" aria-label="App settings">
+    <div class="intel-audit-overlay-backdrop" data-settings-backdrop></div>
     <div class="settings-modal">
       <header class="settings-header">
         <strong>App Settings</strong>
@@ -751,7 +760,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-005"></script>
+  <script type="module" src="js/app.js?v=exec-007"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1091,8 +1100,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-005");
-          const intelMod = await import("./js/intelligence.js?v=exec-005");
+          const dataMod = await import("./js/data.js?v=exec-007");
+          const intelMod = await import("./js/intelligence.js?v=exec-007");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1116,15 +1125,39 @@
       if (form) form.addEventListener("submit", saveExperience);
 
       const AUDIT_OVERLAY_KEY = "grimoire-intel-audit-overlay-v1";
+      const BRAND_OVERLAY_KEY = "grimoire-brand-overlay-v1";
 
       function auditOverlayEl() {
         return document.getElementById("intel-audit-overlay");
+      }
+      function settingsOverlayEl() {
+        return document.getElementById("app-settings-panel");
+      }
+      function brandMenuEl() {
+        return document.getElementById("brand-menu");
+      }
+      function brandWordEl() {
+        return document.getElementById("brand-word");
       }
 
       function persistAuditOverlay(open) {
         try {
           sessionStorage.setItem(AUDIT_OVERLAY_KEY, open ? "open" : "closed");
         } catch (_) {}
+      }
+
+      function persistBrandDest(value) {
+        try {
+          sessionStorage.setItem(BRAND_OVERLAY_KEY, value);
+        } catch (_) {}
+      }
+
+      function lastBrandDest() {
+        try {
+          return sessionStorage.getItem(BRAND_OVERLAY_KEY) || "";
+        } catch (_) {
+          return "";
+        }
       }
 
       function restoreAuditOverlayOpen() {
@@ -1135,11 +1168,33 @@
         }
       }
 
+      function closeBrandMenu() {
+        const menu = brandMenuEl();
+        const word = brandWordEl();
+        if (menu) menu.setAttribute("hidden", "");
+        if (word) word.setAttribute("aria-expanded", "false");
+      }
+
+      function openBrandMenu() {
+        const menu = brandMenuEl();
+        const word = brandWordEl();
+        if (menu) menu.removeAttribute("hidden");
+        if (word) word.setAttribute("aria-expanded", "true");
+        persistBrandDest("menu");
+      }
+
+      function isOpen(el) {
+        return Boolean(el && !el.hasAttribute("hidden"));
+      }
+
       function openIntelAuditOverlay() {
+        closeBrandMenu();
+        if (typeof window.__closeAppSettings === "function") window.__closeAppSettings();
         const overlay = auditOverlayEl();
         if (!overlay) return;
         overlay.removeAttribute("hidden");
         persistAuditOverlay(true);
+        persistBrandDest("audit");
         if (typeof renderIntelAudit === "function") renderIntelAudit();
       }
 
@@ -1153,16 +1208,51 @@
       window.__openIntelAuditOverlay = openIntelAuditOverlay;
       window.__closeIntelAuditOverlay = closeIntelAuditOverlay;
 
-      document.getElementById("brand-word")?.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openIntelAuditOverlay();
-      });
-      document.getElementById("brand-word")?.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
+      function handleBrandActivate(e) {
+        if (e) {
           e.preventDefault();
-          openIntelAuditOverlay();
+          e.stopPropagation();
         }
+        const menuOpen = isOpen(brandMenuEl());
+        const auditOpen = isOpen(auditOverlayEl());
+        const settingsOpen = isOpen(settingsOverlayEl());
+        if (menuOpen) {
+          closeBrandMenu();
+          return;
+        }
+        if (auditOpen || settingsOpen) {
+          closeIntelAuditOverlay();
+          if (typeof window.__closeAppSettings === "function") window.__closeAppSettings();
+          openBrandMenu();
+          return;
+        }
+        const last = lastBrandDest();
+        if (last === "audit") openIntelAuditOverlay();
+        else if (last === "settings") {
+          if (typeof window.__openAppSettings === "function") window.__openAppSettings();
+        } else {
+          openBrandMenu();
+        }
+      }
+
+      document.getElementById("brand-word")?.addEventListener("click", handleBrandActivate);
+      document.getElementById("brand-word")?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") handleBrandActivate(e);
+      });
+      document.querySelectorAll("[data-brand-open]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const dest = btn.getAttribute("data-brand-open");
+          if (dest === "audit") openIntelAuditOverlay();
+          else if (dest === "settings" && typeof window.__openAppSettings === "function") {
+            window.__openAppSettings();
+          }
+        });
+      });
+      document.addEventListener("click", (e) => {
+        if (!isOpen(brandMenuEl())) return;
+        if (e.target.closest("#brand-menu") || e.target.closest("#brand-word")) return;
+        closeBrandMenu();
       });
       document.getElementById("btn-close-intel-audit")?.addEventListener("click", () => {
         closeIntelAuditOverlay();
@@ -1172,11 +1262,16 @@
       });
       document.addEventListener("keydown", (e) => {
         if (e.key !== "Escape") return;
-        const overlay = auditOverlayEl();
-        if (overlay && !overlay.hasAttribute("hidden")) closeIntelAuditOverlay();
+        if (isOpen(brandMenuEl())) {
+          closeBrandMenu();
+          return;
+        }
+        if (isOpen(auditOverlayEl())) closeIntelAuditOverlay();
       });
       if (restoreAuditOverlayOpen()) {
         openIntelAuditOverlay();
+      } else if (lastBrandDest() === "menu") {
+        openBrandMenu();
       }
 
       window.__openExperienceOverlay = openExperienceOverlay;
@@ -1242,7 +1337,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-005");
+          const intelMod = await import("./js/intelligence.js?v=exec-007");
           const audit = Object.assign(
             {
               focuses: [],

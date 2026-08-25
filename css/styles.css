@@ -1201,20 +1201,23 @@ body.universe-view-active {
 .settings-panel {
   position: fixed;
   inset: 0;
-  z-index: 45;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(3px);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: transparent;
 }
 .settings-panel[hidden] {
   display: none !important;
 }
 .settings-modal {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(520px, 92vw);
-  background: rgba(16, 18, 40, 0.92);
+  position: relative;
+  z-index: 1;
+  width: min(640px, 96vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  background: rgba(16, 18, 40, 0.96);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -6302,6 +6305,43 @@ button.session0-send.is-fleet-node {
 .brand-word:hover,
 .brand-word:focus-visible {
   color: var(--gold);
+  outline: none;
+}
+.brand-menu-wrap {
+  position: relative;
+}
+.brand-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 95;
+  min-width: 12.5rem;
+  padding: 0.3rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: rgba(12, 14, 28, 0.96);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.brand-menu[hidden] {
+  display: none !important;
+}
+.brand-menu-item {
+  text-align: left;
+  min-height: 40px;
+  padding: 0.4rem 0.7rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.brand-menu-item:hover,
+.brand-menu-item:focus-visible {
+  background: rgba(124, 92, 252, 0.18);
   outline: none;
 }
 

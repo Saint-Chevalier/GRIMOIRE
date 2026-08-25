@@ -157,13 +157,13 @@ import {
   evaluateSpellConditions,
   normalizeSpellConditions,
   ENTITY_RELATIONS,
-} from "./data.js?v=exec-005";
+} from "./data.js?v=exec-007";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-005";
+} from "./stars.js?v=exec-007";
 import {
   initUniverse,
   setFocusUniverse,
@@ -171,7 +171,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-005";
+} from "./universe.js?v=exec-007";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -245,19 +245,19 @@ import {
   addEntityRelationship,
   removeEntityRelationship,
   detectRelationshipsFromText,
-} from "./intelligence.js?v=exec-005";
+} from "./intelligence.js?v=exec-007";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-005";
+} from "./health.js?v=exec-007";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-005";
+} from "./pulse.js?v=exec-007";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -10816,7 +10816,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-005";
+window.__grimoireBootVersion = "exec-007";
 window.__selectFocusByName = function selectFocusByName(name) {
   const q = String(name || "").trim().toLowerCase();
   if (!q) return false;
@@ -11608,11 +11608,10 @@ els.btnCopyScrollList?.addEventListener("click", async () => {
 // Healer purge button removed from UI — no annihilation control in the header.
 // Focus delete remains off active spell cards; Clear Active handles uncast queue only.
 
-els.btnAppSettings?.addEventListener("click", (e) => {
-  e.stopPropagation();
-  openAppSettings();
-});
 els.btnAppSettingsClose?.addEventListener("click", () => {
+  closeAppSettings();
+});
+document.querySelector("[data-settings-backdrop]")?.addEventListener("click", () => {
   closeAppSettings();
 });
 els.btnSettingsSave?.addEventListener("click", () => persistSettingsFromForm());
@@ -11633,13 +11632,8 @@ els.btnCreateChildFocus?.addEventListener("click", () => {
   if (id) promptCreateChildFocus(id);
   else toast("Select a focus first", "");
 });
-document.addEventListener("click", (e) => {
-  if (
-    els.appSettingsPanel &&
-    !els.appSettingsPanel.hasAttribute("hidden") &&
-    !e.target.closest("#app-settings-panel") &&
-    !e.target.closest("#btn-app-settings")
-  ) {
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && els.appSettingsPanel && !els.appSettingsPanel.hasAttribute("hidden")) {
     closeAppSettings();
   }
 });
@@ -11753,7 +11747,16 @@ function persistSettingsFromForm() {
 
 function openAppSettings() {
   if (!els.appSettingsPanel) return;
+  if (typeof window.__closeIntelAuditOverlay === "function") window.__closeIntelAuditOverlay();
+  const menu = document.getElementById("brand-menu");
+  if (menu) menu.setAttribute("hidden", "");
+  document.getElementById("brand-word")?.setAttribute("aria-expanded", "false");
   els.appSettingsPanel.removeAttribute("hidden");
+  try {
+    sessionStorage.setItem("grimoire-brand-overlay-v1", "settings");
+  } catch {
+    /* ignore */
+  }
   switchSettingsTab("general");
   void hydrateSettingsForm();
 }
@@ -11762,6 +11765,9 @@ function closeAppSettings() {
   if (!els.appSettingsPanel) return;
   els.appSettingsPanel.setAttribute("hidden", "");
 }
+
+window.__openAppSettings = openAppSettings;
+window.__closeAppSettings = closeAppSettings;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Roadmap Engine — /roadmap + panel (does not touch vault covenant / spells / bus / path gate)
