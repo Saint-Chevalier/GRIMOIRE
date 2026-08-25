@@ -4202,6 +4202,37 @@ export async function vaultHealthCheck() {
 
 /** Entity vault folder */
 export const ENTITIES_DIR = "entities";
+export const EXPORT_DIR = "export";
+
+/**
+ * Write a Focus dossier markdown file under vault `export/`.
+ * Execution Directive 004.
+ */
+export async function writeExportDossier(fileName, markdown) {
+  const name = String(fileName || "dossier.md").replace(/[<>:"/\\|?*]+/g, "-").slice(0, 120);
+  const body = String(markdown || "");
+  console.debug("[export] start", { fileName: name, bytes: body.length });
+  const handle = dirHandle || (await restoreIntelligenceFolder());
+  if (!handle || !hasDirectoryPicker()) {
+    const error = "no vault linked";
+    console.error("[export] error", { fileName: name, error });
+    return { ok: false, error };
+  }
+  try {
+    const dir = await handle.getDirectoryHandle(EXPORT_DIR, { create: true });
+    const fh = await dir.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    await w.write(body);
+    await w.close();
+    const path = `${EXPORT_DIR}/${name}`;
+    console.debug("[export] complete", { path, bytes: body.length });
+    return { ok: true, method: "file-system", path, bytes: body.length };
+  } catch (err) {
+    const error = String(err?.message || err);
+    console.error("[export] error", { fileName: name, error });
+    return { ok: false, error };
+  }
+}
 
 /** Last entity vault I/O — Audit panel surfaces failures instead of silent empty. */
 let lastEntityIo = {

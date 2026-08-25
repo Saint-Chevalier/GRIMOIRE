@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-003" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-003" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-004" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-004" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -117,6 +117,7 @@
           <span class="entity-icon" id="entity-icon">✧</span>
           <div>
             <h2 id="entity-name">Select a focus</h2>
+            <p class="focus-breadcrumb" id="focus-breadcrumb" hidden></p>
             <p class="entity-type" id="entity-type">—</p>
             <p class="universe-stage" id="universe-stage">VOID</p>
           </div>
@@ -153,6 +154,12 @@
           </div>
           <button type="button" class="btn-icon btn-brain" id="btn-brain" title="BRAIN — Cell2 Core + Message Bus activity log" aria-label="Open Cell2 Brain log">
             <span aria-hidden="true">BRAIN</span>
+          </button>
+          <button type="button" class="btn-icon" id="btn-export-dossier" title="Export Dossier" aria-label="Export Focus dossier">
+            <span aria-hidden="true">⇩</span>
+          </button>
+          <button type="button" class="btn-icon" id="btn-create-child-focus" title="Create Child Focus" aria-label="Create Child Focus">
+            <span aria-hidden="true">↳</span>
           </button>
           <button type="button" class="btn-icon" id="btn-edit-focus" title="Edit Focus — name, type, model" aria-label="Edit Focus">
             <span aria-hidden="true">✎</span>
@@ -581,32 +588,63 @@
         <button type="button" class="settings-close" id="btn-app-settings-close" aria-label="Close">×</button>
       </header>
       <div class="settings-body">
-        <p class="settings-sub">This is the upgrade anchor for future tabs, pages, and operator settings.</p>
-        <div class="settings-grid">
-          <div class="settings-card">
-            <strong>General</strong>
-            <span class="settings-meta">Identity, vault folder, default model</span>
-          </div>
-          <div class="settings-card">
-            <strong>Spells</strong>
-            <span class="settings-meta">Priority rules, copy format, auto-forge</span>
-          </div>
-          <div class="settings-card">
-            <strong>Tabs</strong>
-            <span class="settings-meta">Future upgrade surface — reserved</span>
-          </div>
-          <div
-            class="settings-card settings-card-action"
-            data-settings-open="roadmap"
-            role="button"
-            tabindex="0"
-            title="Open Roadmap Engine"
-          >
-            <strong>Roadmap</strong>
-            <span class="settings-meta">Plan features · phases · files · acceptance</span>
-          </div>
+        <p class="settings-sub">Local-only operator settings. Nothing leaves this machine.</p>
+        <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button type="button" class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
+          <button type="button" class="settings-tab" data-settings-tab="spells" role="tab" aria-selected="false">Spells</button>
+          <button type="button" class="settings-tab" data-settings-tab="tabs" role="tab" aria-selected="false">Tabs</button>
+          <button type="button" class="settings-tab" data-settings-tab="roadmap" role="tab" aria-selected="false">Roadmap</button>
         </div>
-        <p class="settings-hint">Tip: chat <code>/roadmap &lt;feature&gt;</code> or paste a SCROLL plan.</p>
+        <div class="settings-tab-panel active" data-settings-panel="general" role="tabpanel">
+          <label>Display name
+            <input id="settings-display-name" type="text" autocomplete="nickname" placeholder="Operator name" />
+          </label>
+          <label>Default model
+            <select id="settings-default-model">
+              <option value="none">None — open substrate</option>
+              <option value="Custom">Custom</option>
+              <option value="Hermes">Hermes</option>
+              <option value="Grok">Grok</option>
+              <option value="Claude">Claude</option>
+              <option value="ChatGPT">ChatGPT</option>
+              <option value="Local">Local</option>
+            </select>
+          </label>
+          <label>Vault folder
+            <input id="settings-vault-path" type="text" readonly placeholder="Link with 📁 in the sidebar" />
+          </label>
+          <p class="settings-hint" id="settings-vault-status">Pick a folder — creates GRIMOIRE-FocusIntelligence/</p>
+        </div>
+        <div class="settings-tab-panel" data-settings-panel="spells" role="tabpanel" hidden>
+          <label>Priority rules
+            <select id="settings-spell-priority">
+              <option value="alignment-first">Alignment first</option>
+              <option value="newest">Newest first</option>
+              <option value="mastery">Highest mastery</option>
+            </select>
+          </label>
+          <label>Copy format
+            <select id="settings-copy-format">
+              <option value="markdown">Markdown</option>
+              <option value="plain">Plain text</option>
+            </select>
+          </label>
+          <label class="settings-check">
+            <input id="settings-auto-forge" type="checkbox" />
+            Auto-forge on clear intent
+          </label>
+        </div>
+        <div class="settings-tab-panel" data-settings-panel="tabs" role="tabpanel" hidden>
+          <p class="settings-hint">Reserved upgrade surface. Tab switching works; no settings here yet (Directive 004).</p>
+        </div>
+        <div class="settings-tab-panel" data-settings-panel="roadmap" role="tabpanel" hidden>
+          <div id="settings-roadmap-status" class="settings-roadmap-status">Loading roadmap…</div>
+          <button type="button" class="btn-primary" id="btn-settings-open-roadmap">Open Roadmap Engine</button>
+          <p class="settings-hint">Verify: <code>/roadmap verify</code> · complete is gated.</p>
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="btn-primary" id="btn-settings-save">Save settings</button>
+        </div>
       </div>
     </div>
   </div>
@@ -700,7 +738,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-003"></script>
+  <script type="module" src="js/app.js?v=exec-004"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1040,8 +1078,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-003");
-          const intelMod = await import("./js/intelligence.js?v=exec-003");
+          const dataMod = await import("./js/data.js?v=exec-004");
+          const intelMod = await import("./js/intelligence.js?v=exec-004");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1184,7 +1222,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-003");
+          const intelMod = await import("./js/intelligence.js?v=exec-004");
           const audit = Object.assign(
             {
               focuses: [],

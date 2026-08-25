@@ -6480,3 +6480,190 @@ button.session0-send.is-fleet-node {
   line-height: 1.2;
   margin-top: 0.05rem;
 }
+
+/* ─── Settings tabs (Directive 004) ─── */
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+}
+.settings-tab {
+  min-height: 44px;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+}
+.settings-tab.active {
+  color: var(--text);
+  border-color: rgba(124, 92, 252, 0.55);
+  background: rgba(124, 92, 252, 0.14);
+}
+.settings-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.settings-tab-panel[hidden] {
+  display: none !important;
+}
+.settings-tab-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.settings-tab-panel input,
+.settings-tab-panel select {
+  min-height: 44px;
+  padding: 0.4rem 0.55rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+}
+.settings-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.55rem !important;
+  min-height: 44px;
+}
+.settings-check input {
+  min-height: 20px;
+  width: 18px;
+}
+.settings-actions {
+  margin-top: 0.9rem;
+  display: flex;
+  justify-content: flex-end;
+}
+.settings-actions .btn-primary,
+#btn-settings-open-roadmap {
+  min-height: 44px;
+  padding: 0.45rem 0.9rem;
+}
+.settings-roadmap-status {
+  font-size: 0.82rem;
+  color: var(--text);
+  line-height: 1.45;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+}
+.settings-hint {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+.focus-breadcrumb {
+  margin: 0.1rem 0 0;
+  font-size: 0.72rem;
+  color: var(--gold);
+  letter-spacing: 0.02em;
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.focus-breadcrumb[hidden] {
+  display: none !important;
+}
+
+/* ─── Mobile: collapse three-pane under 768px (Directive 004) ─── */
+@media (max-width: 767px) {
+  html,
+  body,
+  .app {
+    overflow-x: hidden;
+  }
+  .app {
+    flex-direction: column;
+  }
+  .sidebar {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    height: 100%;
+    transform: translateX(-100%);
+    transition: transform 220ms ease;
+  }
+  .app.sidebar-collapsed .sidebar {
+    transform: translateX(-100%);
+  }
+  .app:not(.sidebar-collapsed) .sidebar {
+    transform: translateX(0);
+  }
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 59;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .app:not(.sidebar-collapsed) .sidebar-overlay {
+    display: block;
+  }
+  .spells-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    height: 100%;
+    flex: none;
+    transform: translateX(100%);
+    transition: transform 220ms ease;
+  }
+  .app.spells-collapsed .spells-panel {
+    transform: translateX(100%);
+  }
+  .app:not(.spells-collapsed) .spells-panel {
+    transform: translateX(0);
+  }
+  .intel-audit-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 61;
+    width: 100%;
+    max-width: 100%;
+  }
+  .main.chat-area {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0;
+  }
+  .chat-header,
+  .header-controls {
+    flex-wrap: wrap;
+  }
+  .btn-icon,
+  .btn-new-convo,
+  .btn-primary,
+  .btn-secondary,
+  .btn-send,
+  .intel-audit-tab,
+  .spell-view-tab,
+  .focus-action-btn,
+  .settings-tab,
+  .settings-close {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .intel-audit-toolbar {
+    flex-wrap: wrap;
+    overflow-x: hidden;
+  }
+  .settings-modal {
+    width: 96vw;
+    max-height: 92vh;
+    overflow-y: auto;
+  }
+}

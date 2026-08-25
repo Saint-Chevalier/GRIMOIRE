@@ -145,13 +145,22 @@ import {
   makeHermesDeliveryPayload,
   resolveHermesInjectSessionId,
   SESSION0_RETIRED,
-} from "./data.js?v=exec-003";
+  loadAppSettings,
+  saveAppSettings,
+  DEFAULT_APP_SETTINGS,
+  FOCUS_MAX_DEPTH,
+  focusAncestors,
+  focusDepth,
+  canSpawnChildFocus,
+  focusBreadcrumbLabel,
+  buildFocusDossierMarkdown,
+} from "./data.js?v=exec-004";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-003";
+} from "./stars.js?v=exec-004";
 import {
   initUniverse,
   setFocusUniverse,
@@ -159,7 +168,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-003";
+} from "./universe.js?v=exec-004";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -227,19 +236,22 @@ import {
   autoCaptureEntitiesFromText,
   autoCaptureNodeIntelFromText,
   getLastEntityIo,
-} from "./intelligence.js?v=exec-003";
+  writeExportDossier,
+  readAllEntitiesFromVault,
+  readExperiencesFromVault,
+} from "./intelligence.js?v=exec-004";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-003";
+} from "./health.js?v=exec-004";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-003";
+} from "./pulse.js?v=exec-004";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -510,7 +522,10 @@ const els = {
   emptyState: $("#empty-state"),
   entityIcon: $("#entity-icon"),
   entityName: $("#entity-name"),
+  focusBreadcrumb: $("#focus-breadcrumb"),
   entityType: $("#entity-type"),
+  btnExportDossier: $("#btn-export-dossier"),
+  btnCreateChildFocus: $("#btn-create-child-focus"),
   sealedChannelValue: $("#sealed-channel-value"),
   chatRelayToggle: $("#chat-relay-toggle"),
   chatRelayInput: $("#chat-relay-input"),
@@ -607,6 +622,16 @@ const els = {
   appSettingsPanel: $("#app-settings-panel"),
   btnAppSettings: $("#btn-app-settings"),
   btnAppSettingsClose: $("#btn-app-settings-close"),
+  btnSettingsSave: $("#btn-settings-save"),
+  btnSettingsOpenRoadmap: $("#btn-settings-open-roadmap"),
+  settingsDisplayName: $("#settings-display-name"),
+  settingsDefaultModel: $("#settings-default-model"),
+  settingsVaultPath: $("#settings-vault-path"),
+  settingsVaultStatus: $("#settings-vault-status"),
+  settingsSpellPriority: $("#settings-spell-priority"),
+  settingsCopyFormat: $("#settings-copy-format"),
+  settingsAutoForge: $("#settings-auto-forge"),
+  settingsRoadmapStatus: $("#settings-roadmap-status"),
   galleryDialog: $("#gallery-dialog"),
   galleryBody: $("#gallery-body"),
   btnGalleryClose: $("#btn-gallery-close"),
@@ -2305,13 +2330,28 @@ function buildFocusRow(c) {
   const exportBtn = document.createElement("button");
   exportBtn.type = "button";
   exportBtn.className = "focus-action-btn";
-  exportBtn.title = "Export dossier (.md)";
-  exportBtn.setAttribute("aria-label", `Export dossier for ${c.name}`);
+  exportBtn.title = "Export Dossier";
+  exportBtn.setAttribute("aria-label", `Export Dossier for ${c.name}`);
   exportBtn.textContent = "⇩";
   exportBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     e.preventDefault();
-    exportFocusDossier(c.id);
+    void exportFocusDossier(c.id);
+  });
+
+  const childBtn = document.createElement("button");
+  childBtn.type = "button";
+  childBtn.className = "focus-action-btn";
+  childBtn.title = canSpawnChildFocus(c, state.conversations || [])
+    ? "Create Child Focus"
+    : `Max depth ${FOCUS_MAX_DEPTH}`;
+  childBtn.setAttribute("aria-label", `Create Child Focus under ${c.name}`);
+  childBtn.textContent = "↳";
+  childBtn.disabled = !canSpawnChildFocus(c, state.conversations || []);
+  childBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    void promptCreateChildFocus(c.id);
   });
 
   const del = document.createElement("button");
@@ -2329,6 +2369,7 @@ function buildFocusRow(c) {
   actions.appendChild(pinBtn);
   actions.appendChild(tagBtn);
   actions.appendChild(exportBtn);
+  actions.appendChild(childBtn);
   actions.appendChild(del);
 
   row.appendChild(btn);
@@ -2516,28 +2557,156 @@ function wireFocusDrag(row, focus) {
 
 
 
-/** One-click export of Focus intelligence dossier as markdown download. */
-function exportFocusDossier(focusId) {
+/** One-click export of Focus intelligence dossier as markdown (vault + download). */
+async function exportFocusDossier(focusId) {
   const focus = state.conversations.find((c) => c.id === focusId);
-  if (!focus) return;
+  if (!focus) {
+    toast("Select a focus to export", "");
+    return;
+  }
+  console.debug("[export] start", { focusId, name: focus.name });
   try {
-    const md = buildFocusMarkdown(focus, state.spells || []);
-    const name = focusFileName(focus) || `${focus.id}.md`;
+    const spells = (state.spells || []).filter((s) => s.conversationId === focus.id);
+    let entities = [];
+    let experiences = [];
+    let nodes = [];
+    try {
+      entities = await readAllEntitiesFromVault();
+      experiences = await readExperiencesFromVault();
+      nodes = buildScrollNodesFromConversations(state.conversations || []);
+    } catch (err) {
+      console.debug("[export] vault intel partial", err);
+    }
+    const related = new Set((focus.related_entities || []).map((id) => String(id).toLowerCase()));
+    const focusEntities = related.size
+      ? entities.filter((e) => related.has(String(e.id || "").toLowerCase()) || related.has(String(e.name || "").toLowerCase()) || (e.related_focuses || []).includes(focus.id))
+      : entities.filter((e) => (e.related_focuses || []).includes(focus.id));
+    const md = buildFocusDossierMarkdown(focus, {
+      spells,
+      entities: focusEntities.length ? focusEntities : entities.slice(0, 20),
+      experiences: experiences.filter((x) => !x.focusId || x.focusId === focus.id).slice(0, 40),
+      nodes,
+      busActivity: getBusActivityLog(),
+    });
+    const slug = String(focus.name || focus.id || "focus")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48) || "focus";
+    const fileName = `${slug}-dossier.md`;
+    const vaultWrite = await writeExportDossier(fileName, md);
+    if (!vaultWrite?.ok) {
+      const err = vaultWrite?.error || "vault write failed";
+      console.error("[export] error", err);
+      toast(`Export failed: ${err}`, "error");
+      if (err === "no vault linked") return;
+    }
     const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = name;
+    a.download = fileName;
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-    toast(`Dossier exported: ${name}`, "success");
+    console.debug("[export] complete", { fileName, vault: vaultWrite });
+    toast(
+      vaultWrite?.ok ? `Dossier exported: ${vaultWrite.path}` : `Dossier downloaded: ${fileName}`,
+      vaultWrite?.ok ? "success" : ""
+    );
   } catch (err) {
-    console.warn("exportFocusDossier failed", err);
+    console.error("[export] error", err);
     toast("Export failed", "error");
   }
+}
+
+function promptCreateChildFocus(parentId) {
+  const parent = state.conversations.find((c) => c.id === parentId);
+  if (!parent) return;
+  if (!canSpawnChildFocus(parent, state.conversations || [])) {
+    toast(`Max recursion depth (${FOCUS_MAX_DEPTH}) reached`, "");
+    return;
+  }
+  const name = window.prompt(`Child Focus name (under ${parent.name})`, `${parent.name} · child`);
+  if (name == null) return;
+  const created = createChildFocus(parentId, String(name).trim(), parent.type);
+  if (created) {
+    state.activeId = created.id;
+    persist();
+    renderAll();
+  }
+}
+
+function createChildFocus(parentId, name, type) {
+  const parent = state.conversations.find((c) => c.id === parentId);
+  if (!parent) {
+    toast("Parent Focus not found", "");
+    return null;
+  }
+  if (!canSpawnChildFocus(parent, state.conversations || [])) {
+    toast(`Max recursion depth (${FOCUS_MAX_DEPTH}) reached`, "");
+    console.debug("[focus] spawn child blocked — depth", focusDepth(parent, state.conversations || []));
+    return null;
+  }
+  const cleanName = String(name || "").trim();
+  if (!cleanName) {
+    toast("Child Focus name required", "");
+    return null;
+  }
+  console.debug("[focus] spawn child", { parentId, name: cleanName, type: type || parent.type });
+  const settings = loadAppSettings();
+  const child = createConversation({
+    name: cleanName,
+    type: type || parent.type,
+    model: parent.model || parent.backend || settings.defaultModel || "none",
+  });
+  if (!child) return null;
+
+  child.parent_focus_id = parent.id;
+  child.related_entities = Array.isArray(parent.related_entities)
+    ? parent.related_entities.slice()
+    : [];
+  child.spellPriority = parent.spellPriority || settings.spellPriority || "alignment-first";
+  child.folderId = parent.folderId ?? child.folderId;
+  child.model = parent.model || child.model;
+  child.medium = parent.medium || child.medium;
+  child.backend = parent.backend || child.backend;
+  child.vaultLinked = Boolean(parent.vaultLinked);
+  child.needsPathOnboarding = parent.needsPathOnboarding;
+  child.pathOnboardingDismissed = parent.pathOnboardingDismissed;
+  child.pathGateExempt = parent.pathGateExempt;
+  child.messages = [
+    {
+      id: uid("msg"),
+      role: "grimoire",
+      text: `Child of **${parent.name}**. Inherited model, vault path, entity links, and spell priority. Chat and spells start fresh.`,
+      ts: Date.now(),
+      kind: "spawn",
+    },
+  ];
+  ensureFocusOrgFields(child, { assignFolder: false });
+  console.debug("[focus] inherit", {
+    childId: child.id,
+    parentId: parent.id,
+    model: child.model,
+    vaultLinked: child.vaultLinked,
+    entities: child.related_entities.length,
+    spellPriority: child.spellPriority,
+    depth: focusDepth(child, state.conversations || []),
+  });
+  void (async () => {
+    try {
+      const handle = await resolveFocusFolderHandle(parent);
+      if (handle) await setFocusFolderHandle(child.id, handle, handle.name || "");
+    } catch (err) {
+      console.debug("[focus] inherit vault handle skipped", err);
+    }
+  })();
+  persist();
+  toast(`Child Focus created: ${child.name}`, "success");
+  return child;
 }
 
 function onFocusSearchInput() {
@@ -2742,6 +2911,10 @@ function renderChat() {
   if (!convo) {
     els.entityIcon.textContent = "—";
     els.entityName.textContent = "—";
+    if (els.focusBreadcrumb) {
+      els.focusBreadcrumb.textContent = "";
+      els.focusBreadcrumb.hidden = true;
+    }
     els.entityType.textContent = "—";
     if (els.sealedChannelValue) els.sealedChannelValue.textContent = "—";
     if (els.universeStage) els.universeStage.textContent = "VOID";
@@ -2774,6 +2947,12 @@ function renderChat() {
   /* archetype removed */
   els.entityIcon.textContent = "✧";
   els.entityName.textContent = convo.name;
+  if (els.focusBreadcrumb) {
+    const crumb = focusBreadcrumbLabel(convo, state.conversations || []);
+    const showCrumb = Boolean(convo.parent_focus_id) && crumb.includes(">");
+    els.focusBreadcrumb.textContent = crumb;
+    els.focusBreadcrumb.hidden = !showCrumb;
+  }
   els.entityType.textContent = typeof typeLabel === "function" ? typeLabel(convo) : (convo.type || "—");
   if (els.sealedChannelValue) {
     els.sealedChannelValue.textContent = getSealedChannel(convo);
@@ -10423,7 +10602,12 @@ function createConversation({ name, type, model } = {}) {
     }
     let t = String(type || "person").toLowerCase().trim();
     if (!["person", "place", "thing", "ai", "idea"].includes(t)) t = "person";
-    const rawModel = t === "ai" ? model || "none" : "none";
+    const settings = loadAppSettings();
+    let modelChoice = model;
+    if (t === "ai" && (!modelChoice || modelChoice === "none") && settings.defaultModel && settings.defaultModel !== "none") {
+      modelChoice = settings.defaultModel;
+    }
+    const rawModel = t === "ai" ? modelChoice || "none" : "none";
     const sealed =
       t === "ai"
         ? !rawModel || rawModel === "none"
@@ -10525,6 +10709,9 @@ function createConversation({ name, type, model } = {}) {
       pinned: false,
       tags: [],
       folderId: null,
+      parent_focus_id: null,
+      related_entities: [],
+      spellPriority: settings.spellPriority || "alignment-first",
       // Hard path gate — model (None/Open) never skips folder covenant
       needsPathOnboarding: true,
       pathOnboardingDismissed: false,
@@ -10588,7 +10775,15 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-003";
+window.__grimoireBootVersion = "exec-004";
+window.__grimoireDirective004 = {
+  exportFocusDossier,
+  createChildFocus,
+  loadAppSettings,
+  saveAppSettings,
+  focusDepth,
+  FOCUS_MAX_DEPTH,
+};
 window.__grimoireDirective003 = {
   tryUpgradeSpell,
   evaluateSpellUpgrade,
@@ -11367,6 +11562,24 @@ els.brandText?.addEventListener("click", () => {
 els.btnAppSettingsClose?.addEventListener("click", () => {
   closeAppSettings();
 });
+els.btnSettingsSave?.addEventListener("click", () => persistSettingsFromForm());
+els.btnSettingsOpenRoadmap?.addEventListener("click", () => {
+  closeAppSettings();
+  openRoadmapPanel();
+});
+document.querySelectorAll("[data-settings-tab]").forEach((btn) => {
+  btn.addEventListener("click", () => switchSettingsTab(btn.getAttribute("data-settings-tab")));
+});
+els.btnExportDossier?.addEventListener("click", () => {
+  const id = activeConvo()?.id;
+  if (id) void exportFocusDossier(id);
+  else toast("Select a focus to export", "");
+});
+els.btnCreateChildFocus?.addEventListener("click", () => {
+  const id = activeConvo()?.id;
+  if (id) promptCreateChildFocus(id);
+  else toast("Select a focus first", "");
+});
 document.addEventListener("click", (e) => {
   if (
     els.appSettingsPanel &&
@@ -11408,10 +11621,88 @@ document.querySelectorAll("[data-settings-open='roadmap']").forEach((el) => {
   });
 });
 
+function switchSettingsTab(tab) {
+  const name = String(tab || "general");
+  document.querySelectorAll("[data-settings-tab]").forEach((btn) => {
+    const on = btn.getAttribute("data-settings-tab") === name;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+    const on = panel.getAttribute("data-settings-panel") === name;
+    panel.classList.toggle("active", on);
+    if (on) panel.removeAttribute("hidden");
+    else panel.setAttribute("hidden", "");
+  });
+  if (name === "roadmap") renderSettingsRoadmapStatus();
+}
+
+function renderSettingsRoadmapStatus() {
+  const el = els.settingsRoadmapStatus;
+  if (!el) return;
+  ensureRoadmapsState(state);
+  const rm = activeRoadmap();
+  if (!rm) {
+    el.textContent = "No roadmap yet. Generate one or paste a SCROLL plan.";
+    return;
+  }
+  const steps = flattenRoadmapSteps(rm) || [];
+  const complete = steps.filter((s) => String(s.status || "") === "complete").length;
+  el.innerHTML = `<strong>${escapeHtml(rm.title || rm.name || rm.slug || "Roadmap")}</strong><br/>Status: ${escapeHtml(rm.status || "in-progress")}<br/>Steps: ${complete}/${steps.length} complete<br/>Verify: <code>/roadmap verify</code>`;
+}
+
+async function hydrateSettingsForm() {
+  const settings = loadAppSettings();
+  console.debug("[settings] load", settings);
+  if (els.settingsDisplayName) els.settingsDisplayName.value = settings.displayName || "";
+  if (els.settingsDefaultModel) els.settingsDefaultModel.value = settings.defaultModel || "none";
+  if (els.settingsSpellPriority) els.settingsSpellPriority.value = settings.spellPriority || "alignment-first";
+  if (els.settingsCopyFormat) els.settingsCopyFormat.value = settings.copyFormat || "markdown";
+  if (els.settingsAutoForge) els.settingsAutoForge.checked = Boolean(settings.autoForge);
+  let vaultLabel = settings.vaultFolderHint || "";
+  try {
+    const live = await getFolderLabel();
+    if (live) vaultLabel = live;
+  } catch {
+    /* ignore */
+  }
+  if (els.settingsVaultPath) els.settingsVaultPath.value = vaultLabel;
+  if (els.settingsVaultStatus) {
+    els.settingsVaultStatus.textContent = vaultLabel
+      ? `Linked: ${vaultLabel}`
+      : "Not linked — click 📁 in the sidebar.";
+  }
+  renderSettingsRoadmapStatus();
+}
+
+function collectSettingsFromForm() {
+  return {
+    displayName: String(els.settingsDisplayName?.value || "").trim(),
+    defaultModel: String(els.settingsDefaultModel?.value || "none"),
+    vaultFolderHint: String(els.settingsVaultPath?.value || DEFAULT_APP_SETTINGS.vaultFolderHint),
+    spellPriority: String(els.settingsSpellPriority?.value || "alignment-first"),
+    copyFormat: String(els.settingsCopyFormat?.value || "markdown"),
+    autoForge: Boolean(els.settingsAutoForge?.checked),
+  };
+}
+
+function persistSettingsFromForm() {
+  try {
+    const saved = saveAppSettings(collectSettingsFromForm());
+    toast("Settings saved", "success");
+    return saved;
+  } catch (err) {
+    console.debug("[settings] save failed", err);
+    toast("Settings save failed", "error");
+    return null;
+  }
+}
+
 function openAppSettings() {
   if (!els.appSettingsPanel) return;
   els.appSettingsPanel.removeAttribute("hidden");
-  toast("App settings opened", "");
+  switchSettingsTab("general");
+  void hydrateSettingsForm();
 }
 
 function closeAppSettings() {

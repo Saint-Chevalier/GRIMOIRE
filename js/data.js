@@ -3009,6 +3009,48 @@ export function slugify(name) {
 }
 
 export const STORAGE_KEY = "grimoire-mvp-v1";
+export const SETTINGS_KEY = "grimoire-settings-v1";
+export const FOCUS_MAX_DEPTH = 3;
+
+/** Operator settings — localStorage only, no cloud. */
+export const DEFAULT_APP_SETTINGS = Object.freeze({
+  displayName: "",
+  defaultModel: "none",
+  vaultFolderHint: "D:\\GRIMOIRE\\GRIMOIRE-FocusIntelligence",
+  spellPriority: "alignment-first",
+  copyFormat: "markdown",
+  autoForge: false,
+});
+
+export function loadAppSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_APP_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_APP_SETTINGS, ...(parsed && typeof parsed === "object" ? parsed : {}) };
+  } catch (err) {
+    console.debug("[settings] load failed", err);
+    return { ...DEFAULT_APP_SETTINGS };
+  }
+}
+
+export function saveAppSettings(settings) {
+  const next = { ...DEFAULT_APP_SETTINGS, ...(settings && typeof settings === "object" ? settings : {}) };
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+    console.debug("[settings] save", {
+      displayName: next.displayName,
+      defaultModel: next.defaultModel,
+      spellPriority: next.spellPriority,
+      copyFormat: next.copyFormat,
+      autoForge: Boolean(next.autoForge),
+    });
+  } catch (err) {
+    console.debug("[settings] save failed", err);
+    throw err;
+  }
+  return next;
+}
 
 /** Default organize folders for Focus QoL (search / groups / pin). */
 export const DEFAULT_FOCUS_FOLDERS = [
@@ -3355,7 +3397,127 @@ export function ensureFocusOrgFields(convo, { assignFolder = true } = {}) {
   }
   // Fleet Command schema (linkedSession, breathing, mission, …)
   ensureFleetFocusFields(convo);
+  if (convo.parent_focus_id === undefined) convo.parent_focus_id = null;
+  if (convo.parent_focus_id === "") convo.parent_focus_id = null;
+  if (!Array.isArray(convo.related_entities)) convo.related_entities = [];
+  convo.related_entities = convo.related_entities
+    .map((id) => String(id || "").trim())
+    .filter(Boolean)
+    .slice(0, 64);
+  if (convo.spellPriority == null) convo.spellPriority = "";
   return convo;
+}
+
+/**
+ * Ancestors from root → immediate parent.
+ */
+export function focusAncestors(focus, conversations = []) {
+  const out = [];
+  const seen = new Set();
+  let cur = focus;
+  while (cur && cur.parent_focus_id && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const parent = (conversations || []).find((c) => c.id === cur.parent_focus_id);
+    if (!parent) break;
+    out.unshift(parent);
+    cur = parent;
+  }
+  return out;
+}
+
+/** 1 = root, 2 = child, 3 = grandchild. */
+export function focusDepth(focus, conversations = []) {
+  return 1 + focusAncestors(focus, conversations).length;
+}
+
+export function canSpawnChildFocus(focus, conversations = []) {
+  return Boolean(focus) && focusDepth(focus, conversations) < FOCUS_MAX_DEPTH;
+}
+
+export function focusBreadcrumbLabel(focus, conversations = []) {
+  const chain = [...focusAncestors(focus, conversations), focus].filter(Boolean);
+  return chain.map((c) => String(c.name || c.id || "Focus").trim()).join(" > ");
+}
+
+/**
+ * Self-contained Focus dossier: YAML frontmatter + markdown body.
+ */
+export function buildFocusDossierMarkdown(focus, extras = {}) {
+  const f = focus || {};
+  const q = (v) => `"${String(v ?? "").replace(/"/g, '\\"')}"`;
+  const spells = Array.isArray(extras.spells) ? extras.spells : [];
+  const entities = Array.isArray(extras.entities) ? extras.entities : [];
+  const experiences = Array.isArray(extras.experiences) ? extras.experiences : [];
+  const nodes = Array.isArray(extras.nodes) ? extras.nodes : [];
+  const busActivity = Array.isArray(extras.busActivity) ? extras.busActivity : [];
+  const tags = Array.isArray(f.tags) ? f.tags : [];
+  const created = f.createdAt ? new Date(f.createdAt).toISOString() : "";
+  const updated = f.updatedAt ? new Date(f.updatedAt).toISOString() : new Date().toISOString();
+  const lines = [
+    "---",
+    `name: ${q(f.name || "")}`,
+    `entity: ${q(f.id || "")}`,
+    `type: ${q(f.type || "")}`,
+    `created: ${q(created)}`,
+    `updated: ${q(updated)}`,
+    `parent_focus_id: ${q(f.parent_focus_id || "")}`,
+    `tags: [${tags.map((t) => q(t)).join(", ")}]`,
+    "---",
+    "",
+    `# ${f.name || "Focus"} — Dossier`,
+    "",
+    `Sealed channel: **${f.name || "Focus"} · ${f.medium || f.backend || "Open"}**`,
+    f.parent_focus_id ? `Parent: \`${f.parent_focus_id}\`` : "Parent: _none (root)_",
+    "",
+    "## Linked entities",
+    "",
+  ];
+  if (!entities.length) {
+    lines.push("_None captured._", "");
+  } else {
+    for (const e of entities) {
+      lines.push(`- **${e.name || e.id}** (${e.type || "item"}) · ${e.status || "active"}`);
+    }
+    lines.push("");
+  }
+  lines.push("## Experiences", "");
+  if (!experiences.length) {
+    lines.push("_None captured._", "");
+  } else {
+    for (const x of experiences.slice(0, 40)) {
+      lines.push(`- **${x.title || "Untitled"}** — ${(x.summary || x.what_happened || "").replace(/\s+/g, " ").trim().slice(0, 180)}`);
+    }
+    lines.push("");
+  }
+  lines.push("## Spells", "");
+  if (!spells.length) {
+    lines.push("_No spells._", "");
+  } else {
+    for (const s of spells) {
+      lines.push(`- [${(s.status || "ready").toUpperCase()}] ${s.title || s.purpose || "Spell"} · tier ${s.tier || "initiate"} · mastery ${s.mastery || 0}`);
+    }
+    lines.push("");
+  }
+  lines.push("## Scroll nodes", "");
+  if (!nodes.length) {
+    lines.push("_None._", "");
+  } else {
+    for (const n of nodes.slice(0, 30)) {
+      lines.push(`- **${n.name || n.id}** (${n.type || "node"})`);
+    }
+    lines.push("");
+  }
+  lines.push("## Bus activity", "");
+  if (!busActivity.length) {
+    lines.push("_None._", "");
+  } else {
+    for (const b of busActivity.slice(-20)) {
+      lines.push(`- ${b.timestamp || b.ts || ""} · ${b.kind || "route"} · ${(b.summary || "").replace(/\s+/g, " ").trim().slice(0, 160)}`);
+    }
+    lines.push("");
+  }
+  lines.push("_GRIMOIRE Focus dossier · local-only · Execution Directive 004._", "");
+  return lines.join("\n");
 }
 
 /**
@@ -6251,7 +6413,7 @@ export async function buildSpellCrafterContext(convo) {
   let experiences = [];
   let nodes = [];
   try {
-    const intel = await import("./intelligence.js?v=exec-003");
+    const intel = await import("./intelligence.js?v=exec-004");
     if (typeof intel.readAllEntitiesFromVault === "function") {
       entities = (await intel.readAllEntitiesFromVault()) || [];
     }
