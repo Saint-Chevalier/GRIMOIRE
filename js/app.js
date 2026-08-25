@@ -52,7 +52,11 @@ import {
   classifySpellDisplay,
   spellPasteHint,
   isSelfCastSpell,
-  normalizeSpell,
+  isSelfCastVisual,
+  parseSelfCastCommand,
+  looksLikeSelfCastKeywordAsk,
+  deriveSelfCastPurpose,
+  generateSelfCastSpell,
   spellStatusLabel,
   spellFaceTitle,
   spellFaceStatusKey,
@@ -169,13 +173,13 @@ import {
   evaluateSpellConditions,
   normalizeSpellConditions,
   ENTITY_RELATIONS,
-} from "./data.js?v=exec-011";
+} from "./data.js?v=exec-012";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-011";
+} from "./stars.js?v=exec-012";
 import {
   initUniverse,
   setFocusUniverse,
@@ -183,7 +187,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-011";
+} from "./universe.js?v=exec-012";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -264,19 +268,19 @@ import {
   testNodeConnection,
   writeNodeSecret,
   resolveSpellDispatchNode,
-} from "./intelligence.js?v=exec-011";
+} from "./intelligence.js?v=exec-012";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-011";
+} from "./health.js?v=exec-012";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-011";
+} from "./pulse.js?v=exec-012";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -3472,15 +3476,9 @@ async function renderSpells() {
         spell.status === "history" ||
         spell.status === "sent" ||
         mode === "history";
-      const showSelf = shouldShowSelfCastButton(spell, convo || resolveSpellFocus(spell));
-      if (
-        showSelf &&
-        spell.kind !== "self-cast" &&
-        !isAlignmentSpell(spell) &&
-        !isCuriositySpell(spell)
-      ) {
-        spell.kind = "self-cast";
-      }
+      const ownerPreview = convo || resolveSpellFocus(spell);
+      const showSelf = shouldShowSelfCastButton(spell, ownerPreview);
+      const visualSelf = isSelfCastVisual(spell, ownerPreview);
       const isAwaiting = Boolean(spell.awaitingReply);
       const category =
         spell.category || inferSpellCategory(spell) || "default";
@@ -3490,6 +3488,7 @@ async function renderSpells() {
         (isHist ? " spell-history" : "") +
         (mode === "primary" ? " spell-primary" : " spell-hold") +
         (showSelf ? " spell-self-castable" : "") +
+        (visualSelf ? " spell-self-cast" : "") +
         (isAwaiting ? " spell-awaiting-reply" : "");
       item.dataset.spellId = spell.id;
       item.dataset.category = category;
@@ -3641,6 +3640,11 @@ function spellCardFaceHtml(spell, convo, _opts = {}) {
           aria-label="${escapeHtml(statusLabel)}"
         ></span>
         <span class="spell-face-target-tag" title="Target node">${escapeHtml(targetLabel)}</span>
+        ${
+          isSelfCastVisual(spell, convo)
+            ? `<span class="spell-self-cast-badge" title="Intentional self-cast — reflection loop">SELF-CAST</span>`
+            : ""
+        }
       </div>
     </div>`;
 }
@@ -3676,13 +3680,8 @@ function resolveSpellFocus(spell, fallback) {
  */
 function shouldShowSelfCastButton(spell, convo) {
   if (!spell || isCuriositySpell(spell) || isAlignmentSpell(spell)) return false;
-  const focus = resolveSpellFocus(spell, convo);
-  if (isSelfCastSpell(spell, focus)) return true;
-  try {
-    if (classifySpellDisplay(spell, focus)?.key === "self-cast") return true;
-  } catch {
-    /* ignore */
-  }
+  if (spell.selfCastIntent === true) return true;
+  if (String(spell.kind || "").toLowerCase() === "self-cast") return true;
   return false;
 }
 
@@ -3958,9 +3957,17 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
     .map((t) => `<span class="spell-face-tag">${escapeHtml(t)}</span>`)
     .join("");
 
-  if (els.spellDetailTitle) els.spellDetailTitle.textContent = title;
+  const visualSelf = isSelfCastVisual(spell, focus);
+  if (els.spellDetailDialog) {
+    els.spellDetailDialog.classList.toggle("spell-self-cast", visualSelf);
+  }
+  if (els.spellDetailTitle) {
+    els.spellDetailTitle.textContent = title;
+  }
   if (els.spellDetailSub) {
-    els.spellDetailSub.textContent = subtitle || `v${iter} · ${status} · → ${target}`;
+    els.spellDetailSub.textContent = visualSelf
+      ? `SELF-CAST · v${iter} · ${status} · → ${target}`
+      : subtitle || `v${iter} · ${status} · → ${target}`;
   }
 
   // SCROLL node match for target config
@@ -4024,6 +4031,11 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
         <div class="spell-face-meta">
           <span class="spell-face-target">${escapeHtml(target)}</span>
           <span class="spell-face-version">v${iter}</span>
+          ${
+            visualSelf
+              ? `<span class="spell-self-cast-badge">SELF-CAST</span>`
+              : ""
+          }
         </div>
         <div class="spell-face-meta">
           <span class="spell-face-status spell-face-status-${escapeHtml(
@@ -4343,6 +4355,98 @@ function closeSpellDetailModal() {
 
 /** True while SELF-CAST is injecting into chat — skip auto-forge echo. */
 let selfCastInFlight = false;
+const SELF_CAST_ALIGN_SESSION_PREFIX = "grimoire-self-cast-align-v1:";
+
+function focusDensityPercent(convo) {
+  try {
+    const snap = deriveFocusSnapshot(convo, state.spells);
+    const intel = Number(snap?.intelCount) || 0;
+    return Math.round(Math.min(1, intel / 36) * 100);
+  } catch {
+    return 0;
+  }
+}
+
+function alignmentSelfCastUsed(focusId) {
+  try {
+    return sessionStorage.getItem(SELF_CAST_ALIGN_SESSION_PREFIX + focusId) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markAlignmentSelfCastUsed(focusId) {
+  try {
+    sessionStorage.setItem(SELF_CAST_ALIGN_SESSION_PREFIX + focusId, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+function forgeSelfCastSpell(convo, purposeSource, { command = "", silentToast = false } = {}) {
+  if (!convo) return null;
+  const purpose = deriveSelfCastPurpose(purposeSource, { command });
+  if (!purpose) {
+    if (!silentToast) toast("Self-cast requires stated purpose.", "");
+    return { blocked: true, reason: "Self-cast requires stated purpose." };
+  }
+  const spell = generateSelfCastSpell(convo, purposeSource, { command, allSpells: state.spells });
+  if (spell?.blocked) {
+    if (!silentToast) toast(spell.reason || "Self-cast requires stated purpose.", "");
+    return spell;
+  }
+  commitSpell(convo, spell, { silentToast });
+  if (!silentToast) toast("SELF-CAST forged", "success");
+  return spell;
+}
+
+function handleSelfCastCommand(convo, cmd, rawText) {
+  convo.messages.push({
+    id: uid("msg"),
+    role: "user",
+    text: rawText,
+    ts: Date.now(),
+    kind: "self-cast-command",
+  });
+  const result = forgeSelfCastSpell(convo, rawText, { command: cmd.command });
+  const reply = result?.blocked
+    ? result.reason
+    : `**SELF-CAST** ready on **${convo.name}**. Copy it, paste into this Focus as a reflection prompt, then paste the reply back.`;
+  convo.messages.push({
+    id: uid("msg"),
+    role: "grimoire",
+    text: reply,
+    ts: Date.now(),
+  });
+  persist();
+  renderChat();
+  renderSpells();
+}
+
+function maybeAlignmentThresholdSelfCast(convo, userText) {
+  if (!convo || !looksLikeSelfCastKeywordAsk(userText)) return null;
+  if (parseSelfCastCommand(userText)) return null;
+  if (focusDensityPercent(convo) < 70) return null;
+  if (alignmentSelfCastUsed(convo.id)) return null;
+  const result = forgeSelfCastSpell(convo, userText, { command: "align-threshold" });
+  if (result && !result.blocked) markAlignmentSelfCastUsed(convo.id);
+  return result;
+}
+
+function onForgeSelfCastClick() {
+  const convo = activeConvo();
+  if (!convo) {
+    toast("Select a Focus first", "");
+    return;
+  }
+  const typed = String(els.chatInput?.value || "").trim();
+  const lastUser = [...(convo.messages || [])]
+    .reverse()
+    .find((m) => m.role === "user" && String(m.text || "").trim());
+  const source = typed || String(lastUser?.text || "").trim();
+  if (els.spellsTitleMenu) els.spellsTitleMenu.setAttribute("hidden", "");
+  forgeSelfCastSpell(convo, source, { command: "button" });
+}
 
 /**
  * SELF-CAST — inject spell into the current Focus AI chat (no copy/paste).
@@ -6680,6 +6784,12 @@ function sendMessage(text) {
     return;
   }
 
+  const selfCastCmd = parseSelfCastCommand(userText);
+  if (selfCastCmd) {
+    handleSelfCastCommand(convo, selfCastCmd, userText);
+    return;
+  }
+
   // === Cell2 Message Bus — local routing (before pulse / normal chat) ===
   const busCmd = parseBusCommand(userText);
   if (busCmd) {
@@ -6882,6 +6992,7 @@ function sendMessage(text) {
   // otherwise directives from alignment profile when intent/support exists.
   // Person/Network auto-forge on clear intent or supported general context.
   forgeAfterUserTurn(convo, userText, turn?.reply);
+  maybeAlignmentThresholdSelfCast(convo, userText);
 
   // Chrono-Ring lite: if this looks like a node/entity reply, stamp CAST cards answered
   stampSpellAnsweredFromIngest(convo, userText);
@@ -7272,8 +7383,16 @@ function forgeAfterUserTurn(convo, userText, turnReply) {
       convo.alignmentProfile = parseAlignmentIntelligence(convo.alignmentNotes);
     }
     const forgeHint = nextTruePriorityHint(convo) || text;
+    if (!getActiveNodes().length) {
+      toast(
+        "No external nodes configured. Add a node in Settings → Nodes, or use /self-cast for self-reflection.",
+        ""
+      );
+      return null;
+    }
     const spell = generateSpell(convo, medium, forgeHint, {
       allSpells: state.spells,
+      allowSelfCast: false,
     });
     // Safety: never commit a reveal after lock
     if (isAlignmentSpell(spell)) return null;
@@ -7300,8 +7419,16 @@ function forgeAfterUserTurn(convo, userText, turnReply) {
       return null;
     }
 
+    if (!getActiveNodes().length) {
+      toast(
+        "No external nodes configured. Add a node in Settings → Nodes, or use /self-cast for self-reflection.",
+        ""
+      );
+      return null;
+    }
     const spell = generateSpell(convo, medium, text, {
       allSpells: state.spells,
+      allowSelfCast: false,
     });
     if (isReceiptSpell(spell) || purposeLooksLikeHoldLoop(spell.purpose)) return null;
     commitSpell(convo, spell, { silentToast: true });
@@ -8434,8 +8561,23 @@ function generateAndStoreSpell(convo, userText = "", { silentToast = false } = {
     convo.alignmentProfile = parseAlignmentIntelligence(convo.alignmentNotes);
   }
 
+  if (!getActiveNodes().length && isAiNode(convo) && convoAlignmentUnlocked(convo)) {
+    if (!silentToast) {
+      toast(
+        "No external nodes configured. Add a node in Settings → Nodes, or use /self-cast for self-reflection.",
+        ""
+      );
+    }
+    return {
+      blocked: true,
+      reason:
+        "No external nodes configured. Add a node in Settings → Nodes, or use /self-cast for self-reflection.",
+    };
+  }
+
   const spell = generateSpell(convo, medium, userText || "", {
     allSpells: state.spells,
+    allowSelfCast: false,
   });
   if (isAiNode(convo) && isAlignmentSpell(spell) && convoAlignmentUnlocked(convo)) {
     return { blocked: true, reason: "Alignment already locked — request a directive spell." };
@@ -11062,7 +11204,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-011";
+window.__grimoireBootVersion = "exec-012";
 window.__selectFocusByName = function selectFocusByName(name) {
   const q = String(name || "").trim().toLowerCase();
   if (!q) return false;
@@ -11320,7 +11462,7 @@ function handleSpellsMenuAction(e) {
   }
 
   const item = t.closest(
-    "#btn-copy-spellbook, #btn-craft-complex-spell, [data-action='copy-spellbook'], [data-action='craft-complex']"
+    "#btn-copy-spellbook, #btn-craft-complex-spell, #btn-forge-self-cast, #btn-forge-self-cast-panel, [data-action='copy-spellbook'], [data-action='craft-complex'], [data-action='forge-self-cast']"
   );
   if (!item) return false;
 
@@ -11333,7 +11475,9 @@ function handleSpellsMenuAction(e) {
       ? "copy-spellbook"
       : item.id === "btn-craft-complex-spell"
         ? "craft-complex"
-        : "");
+        : item.id === "btn-forge-self-cast" || item.id === "btn-forge-self-cast-panel"
+          ? "forge-self-cast"
+          : "");
 
   if (action === "craft-complex") {
     setSpellsTitleMenuOpen(false);
@@ -11345,6 +11489,13 @@ function handleSpellsMenuAction(e) {
   if (action === "copy-spellbook") {
     // Sync copy inside this click — menu closes on success inside copySpellbook()
     copySpellbook();
+    return true;
+  }
+
+  if (action === "forge-self-cast") {
+    setSpellsTitleMenuOpen(false);
+    if (refuseIfFocusLocked(activeConvo())) return true;
+    onForgeSelfCastClick();
     return true;
   }
 

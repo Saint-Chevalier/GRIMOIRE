@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-011" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-011" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-012" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-012" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -272,12 +272,18 @@
             <button type="button" class="spells-title-menu-item" role="menuitem" id="btn-craft-complex-spell" data-action="craft-complex">
               Craft complex spell
             </button>
+            <button type="button" class="spells-title-menu-item" role="menuitem" id="btn-forge-self-cast" data-action="forge-self-cast">
+              Forge Self-Cast
+            </button>
             <button type="button" class="spells-title-menu-item" role="menuitem" id="btn-copy-spellbook" data-action="copy-spellbook">
               Copy spellbook
             </button>
           </div>
         </div>
         <div class="spells-header-actions">
+          <button type="button" class="btn-forge-self-cast" id="btn-forge-self-cast-panel" title="Forge an intentional self-cast — requires stated purpose" aria-label="Forge Self-Cast">
+            Forge Self-Cast
+          </button>
           <button type="button" class="btn-clear-all" id="btn-clear-active" title="Clear uncast active spells only — Cast History kept" aria-label="Clear Active spells">
             Clear Active
           </button>
@@ -808,7 +814,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-011"></script>
+  <script type="module" src="js/app.js?v=exec-012"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1148,8 +1154,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-011");
-          const intelMod = await import("./js/intelligence.js?v=exec-011");
+          const dataMod = await import("./js/data.js?v=exec-012");
+          const intelMod = await import("./js/intelligence.js?v=exec-012");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1385,7 +1391,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-011");
+          const intelMod = await import("./js/intelligence.js?v=exec-012");
           const audit = Object.assign(
             {
               focuses: [],

@@ -36,6 +36,7 @@ focus-state-pre-reset-*.json
 private/
 secrets/
 tools/_nodes-011-import.mjs
+tools/_self-cast-012-import.mjs
 
 # OS
 Desktop.ini

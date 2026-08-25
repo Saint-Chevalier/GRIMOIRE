@@ -2779,6 +2779,126 @@ export function engineerSpellFromAlignment(conversation, medium, userHint, profi
   };
 }
 
+/** Slash commands that mint a self-cast (Directive 012). */
+export const SELF_CAST_COMMAND_RE = /^\/(self-cast|reflect|introspect)\b/i;
+export const SELF_CAST_ALIGN_KEYWORDS =
+  /\b(what am i|who are you|my purpose|my gaps)\b/i;
+
+export function parseSelfCastCommand(text) {
+  const raw = String(text || "").trim();
+  const m = raw.match(/^\/(self-cast|reflect|introspect)\b\s*([\s\S]*)$/i);
+  if (!m) return null;
+  return { command: String(m[1] || "").toLowerCase(), rest: String(m[2] || "").trim() };
+}
+
+export function looksLikeSelfCastKeywordAsk(text) {
+  return SELF_CAST_ALIGN_KEYWORDS.test(String(text || ""));
+}
+
+export function deriveSelfCastPurpose(text, { command = "" } = {}) {
+  const parsed = parseSelfCastCommand(text);
+  const raw = String(parsed ? parsed.rest : text || "")
+    .replace(/^\/(self-cast|reflect|introspect)\b\s*/i, "")
+    .trim();
+  if (raw) {
+    const sentence = raw.split(/[.!?\n]/)[0].trim();
+    return sentence.slice(0, 180);
+  }
+  return "";
+}
+
+export function selfCastHasPurpose(spell) {
+  return /##\s*PURPOSE\b/i.test(String(spell?.content || spell?.message || ""));
+}
+
+export function injectSelfCastPurpose(spell, purpose) {
+  const why = String(purpose || "").trim();
+  if (!spell || !why) return false;
+  const block = `## PURPOSE\n${why}`;
+  const body = String(spell.content || spell.message || "");
+  if (/##\s*PURPOSE\b/i.test(body)) {
+    spell.content = body.replace(/##\s*PURPOSE\b[\s\S]*?(?=\n##\s|\n#\s|$)/i, `${block}\n`).trim();
+  } else {
+    spell.content = `${block}\n\n${body}`.trim();
+  }
+  spell.message = spell.content;
+  return true;
+}
+
+export function isSelfCastVisual(spell, convo) {
+  if (!spell) return false;
+  if (spell.selfCastIntent === true) return true;
+  if (String(spell.kind || "").toLowerCase() === "self-cast") return true;
+  if (convo?.id && spell.targetNode?.node_id === convo.id && spell.selfCastIntent) return true;
+  return false;
+}
+
+/**
+ * Intentional self-cast only (Directive 012). Never from normal generateSpell.
+ * Returns a spell, or { blocked: true, reason }.
+ */
+export function generateSelfCastSpell(conversation, purposeSource, opts = {}) {
+  const purpose = deriveSelfCastPurpose(purposeSource, {
+    command: opts.command || parseSelfCastCommand(purposeSource)?.command || "",
+  });
+  if (!purpose) {
+    return { blocked: true, reason: "Self-cast requires stated purpose." };
+  }
+  const med =
+    opts.medium ||
+    getSealedChannel(conversation) ||
+    conversation?.backend ||
+    conversation?.medium ||
+    "Local";
+  const name = String(conversation?.name || "Focus").trim() || "Focus";
+  const draft = normalizeSpell({
+    id: makeSpellId(conversation.id),
+    conversationId: conversation.id,
+    focus_id: conversation.id,
+    target: name,
+    targetNode: {
+      node_id: conversation.id,
+      node_name: name,
+      node_type: "local",
+      dispatch_protocol: "clipboard",
+      channel: "self",
+    },
+    title: `SELF-CAST · ${purpose.slice(0, 72)}`,
+    purpose: `SELF-CAST · ${purpose.slice(0, 72)}`,
+    subtitle: purpose,
+    essence: purpose,
+    medium: med,
+    from: "Operator",
+    crafted: "Intentional self-cast — reflection loop, not auto-noise",
+    message: `Reflect on this Focus as itself.\n\nTrigger: ${String(purposeSource || "").trim().slice(0, 400)}`,
+    content: "",
+    status: "ready",
+    iteration: 1,
+    createdAt: Date.now(),
+    kind: "self-cast",
+    selfCastIntent: true,
+    inLibrary: true,
+  });
+  draft.kind = "self-cast";
+  draft.selfCastIntent = true;
+  draft.target = name;
+  draft.targetNode = {
+    node_id: conversation.id,
+    node_name: name,
+    node_type: "local",
+    dispatch_protocol: "clipboard",
+    channel: "self",
+  };
+  if (!injectSelfCastPurpose(draft, purpose)) {
+    return { blocked: true, reason: "Self-cast requires stated purpose." };
+  }
+  if (!selfCastHasPurpose(draft)) {
+    return { blocked: true, reason: "Self-cast requires stated purpose." };
+  }
+  draft.tags = inferSpellTags(draft);
+  return draft;
+}
+
 export function generateSpell(conversation, medium, userHint = "", opts = {}) {
   const target = conversation.name;
   const focusType = getFocusType(conversation);
@@ -2836,8 +2956,11 @@ export function generateSpell(conversation, medium, userHint = "", opts = {}) {
       alignmentDirectives: profile.directives || [],
       inLibrary: true,
     });
-    if (spellLooksSelfRecursive(draft)) {
+    if (opts.allowSelfCast && spellLooksSelfRecursive(draft)) {
       draft.kind = "self-cast";
+      draft.selfCastIntent = true;
+    } else if (spellLooksSelfRecursive(draft) && !opts.allowSelfCast) {
+      draft.kind = "directive";
     } else {
       // Refine kind from body (healer / self-check / propagate / machine)
       const display = classifySpellDisplay(draft, conversation);
@@ -2902,8 +3025,11 @@ export function generateSpell(conversation, medium, userHint = "", opts = {}) {
     engineeredFromAlignment: aligned && unlocked,
     inLibrary: true,
   });
-  if (spellLooksSelfRecursive(draft)) {
+  if (opts.allowSelfCast && spellLooksSelfRecursive(draft)) {
     draft.kind = "self-cast";
+    draft.selfCastIntent = true;
+  } else if (spellLooksSelfRecursive(draft) && !opts.allowSelfCast) {
+    draft.kind = draft.kind === "standard" ? "directive" : draft.kind;
   } else {
     const display = classifySpellDisplay(draft, conversation);
     if (display?.key && display.key !== "self-cast") {
@@ -3846,7 +3972,12 @@ function migrateState(state) {
       } else if (focus && !isSelfCastSpell(s, focus) && !spellLooksSelfRecursive(s)) {
         s.kind = "directive";
       }
-    } else if (focus && !isAlignmentSpell(s) && spellLooksSelfRecursive(s)) {
+    } else if (
+      focus &&
+      !isAlignmentSpell(s) &&
+      s.selfCastIntent === true &&
+      spellLooksSelfRecursive(s)
+    ) {
       s.kind = "self-cast";
     }
   }
@@ -6665,7 +6796,7 @@ export async function buildSpellCrafterContext(convo) {
   let experiences = [];
   let nodes = [];
   try {
-    const intel = await import("./intelligence.js?v=exec-011");
+    const intel = await import("./intelligence.js?v=exec-012");
     if (typeof intel.readAllEntitiesFromVault === "function") {
       entities = (await intel.readAllEntitiesFromVault()) || [];
     }
