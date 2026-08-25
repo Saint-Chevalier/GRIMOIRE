@@ -154,13 +154,13 @@ import {
   canSpawnChildFocus,
   focusBreadcrumbLabel,
   buildFocusDossierMarkdown,
-} from "./data.js?v=exec-004";
+} from "./data.js?v=exec-reset-1";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-004";
+} from "./stars.js?v=exec-reset-1";
 import {
   initUniverse,
   setFocusUniverse,
@@ -168,7 +168,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-004";
+} from "./universe.js?v=exec-reset-1";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -239,19 +239,19 @@ import {
   writeExportDossier,
   readAllEntitiesFromVault,
   readExperiencesFromVault,
-} from "./intelligence.js?v=exec-004";
+} from "./intelligence.js?v=exec-reset-1";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-004";
+} from "./health.js?v=exec-reset-1";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-004";
+} from "./pulse.js?v=exec-reset-1";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -10775,7 +10775,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-004";
+window.__grimoireBootVersion = "exec-reset-1";
 window.__grimoireDirective004 = {
   exportFocusDossier,
   createChildFocus,

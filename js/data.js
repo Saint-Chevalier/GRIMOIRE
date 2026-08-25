@@ -959,51 +959,23 @@ export function ensureScrollFocus(state) {
 }
 
 /**
- * Seed GRIMOIRE self-recursive Focus once if missing.
- * Operator-critical — purgeProtected. Idempotent.
+ * CLEAN START / Focus Reset 2026-08-25: do not auto-seed GRIMOIRE.
+ * Operator adds Focuses intentionally. Vault intel is untouched.
  */
 export function ensureGrimoireSelfFocus(state) {
   if (!state) return null;
   state.conversations = state.conversations || [];
-  let focus = state.conversations.find(
+  const existing = state.conversations.find(
     (c) =>
       c &&
       (c.id === "grimoire-self" ||
         String(c.name || "").trim().toLowerCase() === "grimoire")
   );
-  if (focus) {
-    focus.purgeProtected = true;
-    if (!focus.medium && !focus.backend) {
-      focus.medium = "Local";
-      focus.backend = "Local";
-      focus.model = focus.model || "Local";
-    }
-    ensureSelfMessageLoop(focus);
-    return focus;
+  if (existing) {
+    existing.purgeProtected = true;
+    return existing;
   }
-  const seed = SEED_CONVERSATIONS.find((c) => c.id === "grimoire-self");
-  const born = Date.now();
-  focus = seed
-    ? structuredClone(seed)
-    : {
-        id: "grimoire-self",
-        name: "GRIMOIRE",
-        type: "ai",
-        medium: "Local",
-        backend: "Local",
-        model: "Local",
-        aiSubtype: "Local",
-        purgeProtected: true,
-        selfRecursive: true,
-        status: "active",
-        messages: [],
-        createdAt: born,
-        updatedAt: born,
-      };
-  focus.purgeProtected = true;
-  ensureSelfMessageLoop(focus);
-  state.conversations.push(focus);
-  return focus;
+  return null;
 }
 
 /**
@@ -3010,6 +2982,9 @@ export function slugify(name) {
 
 export const STORAGE_KEY = "grimoire-mvp-v1";
 export const SETTINGS_KEY = "grimoire-settings-v1";
+/** One-shot operator focus wipe (Focus Reset Directive 2026-08-25). */
+export const FOCUS_RESET_GEN_KEY = "grimoire-focus-reset-generation";
+export const FOCUS_RESET_GENERATION = 1;
 export const FOCUS_MAX_DEPTH = 3;
 
 /** Operator settings — localStorage only, no cloud. */
@@ -3293,78 +3268,98 @@ export function ensureActiveFocus(state) {
   return prefer || null;
 }
 
-export function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed?.conversations?.length) {
-        // Light migration: ensure AI nodes have alignment directive once
-        const priorActive = parsed.activeId || null;
-        migrateState(parsed);
-        if (typeof parsed.spellsOpen !== "boolean") {
-          parsed.spellsOpen = true;
-        }
-        // Library tab deprecated — only active | history
-        if (parsed.spellView === "library") parsed.spellView = "active";
-        if (parsed.spellView !== "history" && parsed.spellView !== "active") {
-          parsed.spellView = "active";
-        }
-        // Compact cards vs full detail list in Spells panel
-        if (parsed.spellListMode !== "detail") parsed.spellListMode = "compact";
-        // Drop layout-regression flag if present
-        delete parsed.sidebarCollapsed;
-        // Spell face/content model migration
-        if (Array.isArray(parsed.spells)) {
-          parsed.spells = parsed.spells.map((s) => normalizeSpell(s));
-        }
-        ensureScrollFocus(parsed);
-        ensureCell2CoreFocus(parsed);
-        ensureGrimoireSelfFocus(parsed);
-        ensureCriticalPurgeProtection(parsed);
-        // Safe merge of dual Wizard King / sealed-channel clones (no history loss)
-        try {
-          mergeDuplicateSealedFocuses(parsed);
-        } catch {
-          /* non-fatal */
-        }
-        // Fleet Command schema migration (legacy → linkedSession / breathing / autoCast)
-        try {
-          ensureFleetCommandState(parsed);
-        } catch {
-          /* non-fatal */
-        }
-        // Restore prior active if still valid; else pick a sensible default
-        parsed.activeId = priorActive;
-        ensureActiveFocus(parsed);
-        ensureRoadmapsState(parsed);
-        return parsed;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  const conversations = structuredClone(SEED_CONVERSATIONS).map((c) =>
-    ensureFocusOrgFields(c)
-  );
-  const fresh = {
-    conversations,
-    spells: structuredClone(SEED_SPELLS).map((s) => normalizeSpell(s)),
+/**
+ * Hidden Cell2 only — no visible Focuses, no seed GRIMOIRE.
+ * Focus Reset Directive: wipe app references, keep vault + settings.
+ */
+export function makeCleanFocusState(from = null) {
+  const clean = {
+    conversations: [],
+    spells: [],
     activeId: null,
     spellsOpen: true,
     spellView: "active",
     spellListMode: "compact",
     focusFolders: structuredClone(DEFAULT_FOCUS_FOLDERS),
-    roadmaps: [],
-    activeRoadmapSlug: null,
+    roadmaps: Array.isArray(from?.roadmaps) ? from.roadmaps : [],
+    activeRoadmapSlug:
+      typeof from?.activeRoadmapSlug === "string" ? from.activeRoadmapSlug : null,
   };
-  ensureScrollFocus(fresh);
-  ensureCell2CoreFocus(fresh);
-  ensureGrimoireSelfFocus(fresh);
-  ensureCriticalPurgeProtection(fresh);
-  ensureFleetCommandState(fresh);
-  ensureRoadmapsState(fresh);
-  return fresh;
+  ensureCell2CoreFocus(clean);
+  try {
+    ensureFleetCommandState(clean);
+  } catch {
+    /* non-fatal */
+  }
+  ensureRoadmapsState(clean);
+  clean.activeId = null;
+  return clean;
+}
+
+export function loadState() {
+  let parsed = null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) parsed = JSON.parse(raw);
+  } catch {
+    parsed = null;
+  }
+
+  try {
+    const gen = Number(localStorage.getItem(FOCUS_RESET_GEN_KEY) || 0);
+    if (gen < FOCUS_RESET_GENERATION) {
+      const clean = makeCleanFocusState(parsed);
+      localStorage.setItem(FOCUS_RESET_GEN_KEY, String(FOCUS_RESET_GENERATION));
+      saveState(clean);
+      console.debug("[focus-reset] applied generation", FOCUS_RESET_GENERATION, {
+        visible: (clean.conversations || []).filter((c) => isVisibleFocus(c)).length,
+        keptHidden: (clean.conversations || []).filter((c) => !isVisibleFocus(c)).map((c) => c.name),
+      });
+      return clean;
+    }
+  } catch (err) {
+    console.debug("[focus-reset] failed", err);
+  }
+
+  try {
+    if (parsed && Array.isArray(parsed.conversations)) {
+      const priorActive = parsed.activeId || null;
+      migrateState(parsed);
+      if (typeof parsed.spellsOpen !== "boolean") {
+        parsed.spellsOpen = true;
+      }
+      if (parsed.spellView === "library") parsed.spellView = "active";
+      if (parsed.spellView !== "history" && parsed.spellView !== "active") {
+        parsed.spellView = "active";
+      }
+      if (parsed.spellListMode !== "detail") parsed.spellListMode = "compact";
+      delete parsed.sidebarCollapsed;
+      if (Array.isArray(parsed.spells)) {
+        parsed.spells = parsed.spells.map((s) => normalizeSpell(s));
+      }
+      ensureScrollFocus(parsed);
+      ensureCell2CoreFocus(parsed);
+      // Do not auto-seed GRIMOIRE after operator reset (empty visible list is valid).
+      ensureCriticalPurgeProtection(parsed);
+      try {
+        mergeDuplicateSealedFocuses(parsed);
+      } catch {
+        /* non-fatal */
+      }
+      try {
+        ensureFleetCommandState(parsed);
+      } catch {
+        /* non-fatal */
+      }
+      parsed.activeId = priorActive;
+      ensureActiveFocus(parsed);
+      ensureRoadmapsState(parsed);
+      return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+  return makeCleanFocusState(parsed);
 }
 
 /** Normalize Focus org QoL fields (pin, tags, folder, timestamps). */
@@ -6413,7 +6408,7 @@ export async function buildSpellCrafterContext(convo) {
   let experiences = [];
   let nodes = [];
   try {
-    const intel = await import("./intelligence.js?v=exec-004");
+    const intel = await import("./intelligence.js?v=exec-reset-1");
     if (typeof intel.readAllEntitiesFromVault === "function") {
       entities = (await intel.readAllEntitiesFromVault()) || [];
     }

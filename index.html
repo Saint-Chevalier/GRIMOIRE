@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-004" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-004" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-reset-1" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-reset-1" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -738,7 +738,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-004"></script>
+  <script type="module" src="js/app.js?v=exec-reset-1"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1078,8 +1078,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-004");
-          const intelMod = await import("./js/intelligence.js?v=exec-004");
+          const dataMod = await import("./js/data.js?v=exec-reset-1");
+          const intelMod = await import("./js/intelligence.js?v=exec-reset-1");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1222,7 +1222,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-004");
+          const intelMod = await import("./js/intelligence.js?v=exec-reset-1");
           const audit = Object.assign(
             {
               focuses: [],
