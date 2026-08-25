@@ -1,0 +1,39 @@
+# Security Protocol Directive 008 — fail if private vault files land in the repo.
+name: Vault guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  vault-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Block vault / secret paths
+        shell: bash
+        run: |
+          set -e
+          echo "[vault-guard] scanning tracked files…"
+          # Path segments only — do not match public tools named *grok-build-daskw*.
+          HITS=$(git ls-files | grep -Ei '(^|/)GRIMOIRE-FocusIntelligence(/|$)|(^|/)FocusIntelligence(/|$)|(^|/)grok-build-daskw(/|$)|(^|/)pending-review(/|$)|focus-state-pre-reset|(^|/)\.env($|\.)|\.pem$|\.key$' || true)
+          if [ -n "$HITS" ]; then
+            echo "[vault-guard] BLOCKED tracked private paths:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "[vault-guard] ok"
+      - name: Screen public docs
+        run: |
+          node tools/sanitize-public-doc.mjs README.md
+          node tools/sanitize-public-doc.mjs CONTRIBUTING.md
+          node tools/sanitize-public-doc.mjs docs/ROADMAP.md
+          node tools/sanitize-public-doc.mjs docs/security/OPEN-SOURCE-PROTOCOL.md
+          node tools/sanitize-public-doc.mjs docs/security/DATA-CLASSIFICATION.md
+      - name: Screening unit tests
+        run: node tools/test-security-protocol-008.mjs
+      - name: Structural verifier
+        run: node tools/verify-directive-008.mjs

@@ -59,4 +59,11 @@ Be precise. Be kind under pressure. Correct wrong claims without theater. Disagr
 
 ## Security
 
+Private vaults never belong in this repository. See [Open-source protocol](docs/security/OPEN-SOURCE-PROTOCOL.md) and [Data classification](docs/security/DATA-CLASSIFICATION.md).
+
+```bash
+git config core.hooksPath tools/githooks
+npm test   # screening + sanitizer tests
+```
+
 If you find a vulnerability, open a private report or contact the maintainers via the Discord path listed in the README. Do not dump exploit PoCs publicly without coordination.

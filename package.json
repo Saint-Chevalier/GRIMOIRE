@@ -7,7 +7,11 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tools/test-security-protocol-008.mjs",
+    "screen": "node tools/screen-delta-intelligence.mjs",
+    "sanitize": "node tools/sanitize-public-doc.mjs",
+    "vault-guard": "node tools/guard-vault-staged.mjs",
+    "daskw-init": "node tools/init-grok-build-daskw.mjs"
   },
   "repository": {
     "type": "git",

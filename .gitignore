@@ -16,9 +16,16 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Local intelligence vault (NEVER ship user vaults)
+# Local intelligence vault (NEVER ship user vaults) — Security Protocol 008
 GRIMOIRE-FocusIntelligence/
+**/GRIMOIRE-FocusIntelligence/
 **/FocusIntelligence/
+**/grok-build-daskw/
+**/pending-review/
+backups/
+*-backup-*.json
+focus-state-pre-reset-*.json
+.grimoire-vault
 
 # Local-only runtime dumps
 *.local.md

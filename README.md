@@ -101,7 +101,7 @@ docs/               public status + roadmap
 
 Runtime state: **localStorage**. Optional disk vault folder is created only when **you** pick a parent directory in-browser.
 
-**Secrets / OPSEC:** `.env`, vault folders, and keys are gitignored. This app does not need cloud credentials to run.
+**Secrets / OPSEC:** `.env`, vault folders, and keys are gitignored. This app does not need cloud credentials to run. See [Open-source protocol](docs/security/OPEN-SOURCE-PROTOCOL.md).
 
 ---
 

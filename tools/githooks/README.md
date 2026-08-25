@@ -14,8 +14,9 @@ git config core.hooksPath tools/githooks
 
 `pre-commit` runs:
 
-1. `node --check` on staged `.js` / `.mjs`
-2. `node tools/roadmap-verify.mjs --gbg` (file + source_match gates for the verification layer)
+1. `node tools/guard-vault-staged.mjs` — fail if vault / secrets are staged (Directive 008)
+2. `node --check` on staged `.js` / `.mjs`
+3. `node tools/roadmap-verify.mjs --gbg` (file + source_match gates for the verification layer)
 
 Optional vault probe:
 

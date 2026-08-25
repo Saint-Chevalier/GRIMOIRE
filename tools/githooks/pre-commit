@@ -11,6 +11,11 @@ set -e
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
+if [ -f "tools/guard-vault-staged.mjs" ]; then
+  echo "[gbg] vault-guard staged paths…"
+  node tools/guard-vault-staged.mjs || exit 1
+fi
+
 STAGED_JS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(js|mjs)$' || true)
 
 if [ -n "$STAGED_JS" ]; then
