@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-reset-1" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-reset-1" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-006" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-006" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -56,10 +56,18 @@
         </button>
         <div class="brand">
           <span class="brand-glyph" aria-hidden="true">✧</span>
-          <div class="brand-text" id="brand-text" title="App settings and roadmap">
-            <h1>Grimoire</h1>
+          <div class="brand-text" id="brand-text">
+            <h1
+              class="brand-word"
+              id="brand-word"
+              role="button"
+              tabindex="0"
+              title="Open Intelligence Audit"
+              aria-label="Open Intelligence Audit"
+            >Grimoire</h1>
             <p class="brand-sub">Constellation Codex</p>
           </div>
+          <button type="button" class="btn-app-settings-icon" id="btn-app-settings" title="App settings" aria-label="App settings">⚙</button>
         </div>
         <div class="vault-folder-btn-wrap" id="vault-folder-btn-wrap">
           <button type="button" class="btn-intel-folder" id="btn-intel-folder" title="Choose Intelligence Folder">
@@ -276,16 +284,18 @@
       <div class="spells-list" id="spells-list"></div>
     </aside>
 
-    <!-- RIGHT: Intelligence Audit panel -->
-    <aside class="intel-audit-panel" id="intel-audit-panel" hidden>
+    </div>
+
+  <!-- Intelligence Audit — opt-in full-screen overlay (Directive 006) -->
+  <div id="intel-audit-overlay" class="intel-audit-overlay" hidden>
+    <div class="intel-audit-overlay-backdrop" data-audit-backdrop></div>
+    <aside class="intel-audit-panel" id="intel-audit-panel" role="dialog" aria-modal="true" aria-labelledby="btn-intel-audit-title">
       <header class="intel-audit-header">
         <div class="intel-audit-title-wrap">
           <button
             type="button"
             class="intel-audit-title-btn"
             id="btn-intel-audit-title"
-            aria-haspopup="menu"
-            aria-expanded="false"
             title="Intelligence audit"
             aria-label="Intelligence audit"
           >
@@ -293,7 +303,6 @@
           </button>
         </div>
         <div class="intel-audit-header-actions">
-          <button type="button" class="btn-icon subtle" id="btn-minimize-intel-audit" title="Minimize Intelligence Audit" aria-label="Minimize Intelligence Audit" aria-pressed="false">–</button>
           <button type="button" class="btn-icon subtle" id="btn-close-intel-audit" title="Close Intelligence Audit" aria-label="Close Intelligence Audit">×</button>
         </div>
       </header>
@@ -738,7 +747,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-reset-1"></script>
+  <script type="module" src="js/app.js?v=exec-006"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1078,8 +1087,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-reset-1");
-          const intelMod = await import("./js/intelligence.js?v=exec-reset-1");
+          const dataMod = await import("./js/data.js?v=exec-006");
+          const intelMod = await import("./js/intelligence.js?v=exec-006");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1102,54 +1111,74 @@
       if (cancel) cancel.addEventListener("click", closeExperienceOverlay);
       if (form) form.addEventListener("submit", saveExperience);
 
-      document.addEventListener("click", function (e) {
-        const btn = e.target.closest("#btn-toggle-experiences");
-        if (btn) {
-          const panel = document.getElementById("intel-audit-panel");
-          const spellsPanel = document.getElementById("spells-panel");
-          if (panel) {
-            const hidden = panel.hasAttribute("hidden");
-            if (hidden) {
-              panel.removeAttribute("hidden");
-              if (spellsPanel) spellsPanel.setAttribute("hidden", "");
-              applyAuditMinimized(restoreAuditMinimized());
-              renderIntelAudit();
-            } else {
-              panel.setAttribute("hidden", "");
-            }
-          }
-        }
-      });
+      const AUDIT_OVERLAY_KEY = "grimoire-intel-audit-overlay-v1";
 
-      window.__openExperienceOverlay = openExperienceOverlay;
-      window.__closeExperienceOverlay = closeExperienceOverlay;
+      function auditOverlayEl() {
+        return document.getElementById("intel-audit-overlay");
+      }
 
-      const AUDIT_MINIMIZE_KEY = "grimoire-intel-audit-minimized-v1";
-      const AUDIT_UI_TIMEOUT_MS = 5000;
-
-      function applyAuditMinimized(minimized) {
-        const panel = document.getElementById("intel-audit-panel");
-        const btn = document.getElementById("btn-minimize-intel-audit");
-        if (!panel) return;
-        panel.classList.toggle("is-minimized", Boolean(minimized));
-        if (btn) {
-          btn.textContent = minimized ? "▢" : "–";
-          btn.setAttribute("aria-pressed", minimized ? "true" : "false");
-          btn.title = minimized ? "Expand Intelligence Audit" : "Minimize Intelligence Audit";
-          btn.setAttribute("aria-label", btn.title);
-        }
+      function persistAuditOverlay(open) {
         try {
-          sessionStorage.setItem(AUDIT_MINIMIZE_KEY, minimized ? "1" : "0");
+          sessionStorage.setItem(AUDIT_OVERLAY_KEY, open ? "open" : "closed");
         } catch (_) {}
       }
 
-      function restoreAuditMinimized() {
+      function restoreAuditOverlayOpen() {
         try {
-          return sessionStorage.getItem(AUDIT_MINIMIZE_KEY) === "1";
+          return sessionStorage.getItem(AUDIT_OVERLAY_KEY) === "open";
         } catch (_) {
           return false;
         }
       }
+
+      function openIntelAuditOverlay() {
+        const overlay = auditOverlayEl();
+        if (!overlay) return;
+        overlay.removeAttribute("hidden");
+        persistAuditOverlay(true);
+        if (typeof renderIntelAudit === "function") renderIntelAudit();
+      }
+
+      function closeIntelAuditOverlay() {
+        const overlay = auditOverlayEl();
+        if (!overlay) return;
+        overlay.setAttribute("hidden", "");
+        persistAuditOverlay(false);
+      }
+
+      window.__openIntelAuditOverlay = openIntelAuditOverlay;
+      window.__closeIntelAuditOverlay = closeIntelAuditOverlay;
+
+      document.getElementById("brand-word")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openIntelAuditOverlay();
+      });
+      document.getElementById("brand-word")?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openIntelAuditOverlay();
+        }
+      });
+      document.getElementById("btn-close-intel-audit")?.addEventListener("click", () => {
+        closeIntelAuditOverlay();
+      });
+      document.querySelector("[data-audit-backdrop]")?.addEventListener("click", () => {
+        closeIntelAuditOverlay();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        const overlay = auditOverlayEl();
+        if (overlay && !overlay.hasAttribute("hidden")) closeIntelAuditOverlay();
+      });
+      if (restoreAuditOverlayOpen()) {
+        openIntelAuditOverlay();
+      }
+
+      window.__openExperienceOverlay = openExperienceOverlay;
+      window.__closeExperienceOverlay = closeExperienceOverlay;
+
+      const AUDIT_UI_TIMEOUT_MS = 5000;
 
       function switchAuditTab(tabName) {
         document.querySelectorAll(".intel-audit-tab-panel").forEach((p) => {
@@ -1169,19 +1198,6 @@
       document.querySelectorAll(".intel-audit-tab").forEach(btn => {
         btn.addEventListener("click", () => switchAuditTab(btn.dataset.tab));
       });
-
-      document.getElementById("btn-minimize-intel-audit")?.addEventListener("click", () => {
-        const panel = document.getElementById("intel-audit-panel");
-        const next = !panel?.classList.contains("is-minimized");
-        applyAuditMinimized(next);
-      });
-
-      document.getElementById("btn-close-intel-audit")?.addEventListener("click", () => {
-        const panel = document.getElementById("intel-audit-panel");
-        if (panel) panel.setAttribute("hidden", "");
-      });
-
-      applyAuditMinimized(restoreAuditMinimized());
 
       function auditErrorHtml(title, err, debug) {
         const dbg = debug ? JSON.stringify(debug, null, 2) : String(err || "");
@@ -1222,7 +1238,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-reset-1");
+          const intelMod = await import("./js/intelligence.js?v=exec-006");
           const audit = Object.assign(
             {
               focuses: [],

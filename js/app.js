@@ -154,13 +154,13 @@ import {
   canSpawnChildFocus,
   focusBreadcrumbLabel,
   buildFocusDossierMarkdown,
-} from "./data.js?v=exec-reset-1";
+} from "./data.js?v=exec-006";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-reset-1";
+} from "./stars.js?v=exec-006";
 import {
   initUniverse,
   setFocusUniverse,
@@ -168,7 +168,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-reset-1";
+} from "./universe.js?v=exec-006";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -239,19 +239,19 @@ import {
   writeExportDossier,
   readAllEntitiesFromVault,
   readExperiencesFromVault,
-} from "./intelligence.js?v=exec-reset-1";
+} from "./intelligence.js?v=exec-006";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-reset-1";
+} from "./health.js?v=exec-006";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-reset-1";
+} from "./pulse.js?v=exec-006";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -10775,7 +10775,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-reset-1";
+window.__grimoireBootVersion = "exec-006";
 window.__grimoireDirective004 = {
   exportFocusDossier,
   createChildFocus,
@@ -11556,7 +11556,8 @@ els.btnCopyScrollList?.addEventListener("click", async () => {
 // Healer purge button removed from UI — no annihilation control in the header.
 // Focus delete remains off active spell cards; Clear Active handles uncast queue only.
 
-els.brandText?.addEventListener("click", () => {
+els.btnAppSettings?.addEventListener("click", (e) => {
+  e.stopPropagation();
   openAppSettings();
 });
 els.btnAppSettingsClose?.addEventListener("click", () => {
@@ -11585,7 +11586,7 @@ document.addEventListener("click", (e) => {
     els.appSettingsPanel &&
     !els.appSettingsPanel.hasAttribute("hidden") &&
     !e.target.closest("#app-settings-panel") &&
-    !e.target.closest("#brand-text")
+    !e.target.closest("#btn-app-settings")
   ) {
     closeAppSettings();
   }

@@ -6408,7 +6408,7 @@ export async function buildSpellCrafterContext(convo) {
   let experiences = [];
   let nodes = [];
   try {
-    const intel = await import("./intelligence.js?v=exec-reset-1");
+    const intel = await import("./intelligence.js?v=exec-006");
     if (typeof intel.readAllEntitiesFromVault === "function") {
       entities = (await intel.readAllEntitiesFromVault()) || [];
     }
