@@ -1150,6 +1150,13 @@ body.universe-view-active {
   box-shadow: 0 0 10px rgba(251, 191, 36, 0.25);
 }
 
+.btn-intel-folder.vault-needs-relink,
+.vault-folder-btn-wrap.vault-needs-relink .btn-intel-folder {
+  border-color: rgba(251, 191, 36, 0.8);
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.28), 0 0 16px rgba(251, 191, 36, 0.4);
+  animation: vault-folder-btn-glow 1.6s ease-in-out infinite;
+}
+
 .btn-intel-folder:hover {
   border-color: var(--accent);
   background: rgba(167, 139, 250, 0.18);
@@ -1699,6 +1706,14 @@ body.universe-view-active {
 
 .intel-folder-status.warn {
   color: var(--draft);
+}
+
+.intel-folder-status.unlinked {
+  color: #fbbf24;
+}
+
+.intel-folder-status.error {
+  color: #f87171;
 }
 
 .brand-glyph {

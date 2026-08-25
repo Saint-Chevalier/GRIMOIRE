@@ -22,10 +22,23 @@ if [ -n "$STAGED_JS" ]; then
   echo "[gbg] node --check staged JS…"
   echo "$STAGED_JS" | while IFS= read -r f; do
     [ -f "$f" ] || continue
-    node --check "$f" || {
-      echo "[gbg] FAIL: node --check $f"
-      exit 1
-    }
+    if [ "${f%.mjs}" != "$f" ]; then
+      node --check "$f" || {
+        echo "[gbg] FAIL: node --check $f"
+        exit 1
+      }
+    elif head -n 30 "$f" | grep -qE '^[[:space:]]*(import|export) '; then
+      # Browser ESM in a CJS package.json — pipe so --check accepts import/export
+      node --input-type=module --check < "$f" || {
+        echo "[gbg] FAIL: node --check $f (esm)"
+        exit 1
+      }
+    else
+      node --check "$f" || {
+        echo "[gbg] FAIL: node --check $f"
+        exit 1
+      }
+    fi
   done
 fi
 

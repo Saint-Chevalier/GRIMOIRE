@@ -21,6 +21,8 @@ window.addEventListener("unhandledrejection", function(ev) {
 });
 import {
   applyFocusClassification,
+  VAULT_HEALTH,
+  vaultStatusLabel,
   DEFAULT_FOCUS_FOLDERS,
   ensureFocusOrgFields,
   focusExists,
@@ -157,13 +159,13 @@ import {
   evaluateSpellConditions,
   normalizeSpellConditions,
   ENTITY_RELATIONS,
-} from "./data.js?v=exec-007";
+} from "./data.js?v=exec-009";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-007";
+} from "./stars.js?v=exec-009";
 import {
   initUniverse,
   setFocusUniverse,
@@ -171,7 +173,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-007";
+} from "./universe.js?v=exec-009";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -180,9 +182,8 @@ import {
   recordFocusEvent,
   deleteFocusIntelligenceFile,
   getFolderLabel,
+  getVaultHealth,
   hasDirectoryPicker,
-  wasIntelligenceSetupSkipped,
-  isIntelligenceSetupComplete,
   isFocusVaultLinked,
   resolveFocusFolderHandle,
   setFocusFolderHandle,
@@ -245,19 +246,19 @@ import {
   addEntityRelationship,
   removeEntityRelationship,
   detectRelationshipsFromText,
-} from "./intelligence.js?v=exec-007";
+} from "./intelligence.js?v=exec-009";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-007";
+} from "./health.js?v=exec-009";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-007";
+} from "./pulse.js?v=exec-009";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -9825,28 +9826,69 @@ function touchFleetActivity(focus) {
   }
 }
 
+function applyVaultHealthToDom(health) {
+  const state = health?.state || VAULT_HEALTH.NEVER;
+  const status = els.intelFolderStatus;
+  const btn = els.btnIntelFolder;
+  const wrap = els.vaultFolderBtnWrap;
+  const needsRelink = state === VAULT_HEALTH.UNLINKED || state === VAULT_HEALTH.ERROR;
+  const label = vaultStatusLabel(health);
+
+  if (status) {
+    status.textContent = label;
+    status.dataset.vaultState = state;
+    status.className = "intel-folder-status";
+    if (state === VAULT_HEALTH.LINKED) status.classList.add("ready");
+    else if (state === VAULT_HEALTH.ERROR) status.classList.add("error");
+    else if (state === VAULT_HEALTH.UNLINKED) status.classList.add("unlinked");
+  }
+  if (btn) {
+    btn.classList.toggle("ready", state === VAULT_HEALTH.LINKED);
+    btn.classList.toggle("vault-needs-relink", needsRelink);
+    if (state === VAULT_HEALTH.LINKED) {
+      btn.title = `Change Intelligence Folder (current: ${health.folderName || "vault"})`;
+    } else if (needsRelink) {
+      btn.title = "Re-link vault — click to restore folder access";
+    } else {
+      btn.title = "Set / change Intelligence Folder";
+    }
+  }
+  if (wrap) wrap.classList.toggle("vault-needs-relink", needsRelink);
+
+  if (els.settingsVaultPath) {
+    els.settingsVaultPath.value = health?.folderName || els.settingsVaultPath.value || "";
+  }
+  if (els.settingsVaultStatus) {
+    if (state === VAULT_HEALTH.LINKED) {
+      els.settingsVaultStatus.textContent = `Linked: ${health.folderName || "vault"}`;
+    } else if (state === VAULT_HEALTH.UNLINKED) {
+      els.settingsVaultStatus.textContent = health?.captureDisabled
+        ? "Vault unlinked — intelligence capture disabled"
+        : "Vault unlinked — click 📁 to restore";
+    } else if (state === VAULT_HEALTH.ERROR) {
+      els.settingsVaultStatus.textContent = "Vault error — click 📁 to restore";
+    } else {
+      els.settingsVaultStatus.textContent = "Not linked — click 📁 in the sidebar.";
+    }
+  }
+  setVaultFailState(state === VAULT_HEALTH.ERROR);
+}
+
 async function refreshIntelFolderUi() {
-  const label = await getFolderLabel();
   if (!els.intelFolderStatus || !els.btnIntelFolder) return;
-  if (label && isIntelligenceSetupComplete()) {
-    els.intelFolderStatus.textContent = `Vault → ${label}/`;
-    els.intelFolderStatus.className = "intel-folder-status ready";
-    els.btnIntelFolder.classList.add("ready");
-    els.btnIntelFolder.title = `Change Intelligence Folder (current: ${label})`;
-  } else if (!hasDirectoryPicker()) {
+  if (!hasDirectoryPicker()) {
+    applyVaultHealthToDom({ state: VAULT_HEALTH.ERROR, folderName: null });
     els.intelFolderStatus.textContent =
       "No folder API — will download .md (use Chrome/Edge)";
     els.intelFolderStatus.className = "intel-folder-status warn";
+    els.intelFolderStatus.dataset.vaultState = VAULT_HEALTH.ERROR;
     els.btnIntelFolder.classList.remove("ready");
+    els.btnIntelFolder.classList.add("vault-needs-relink");
     els.btnIntelFolder.title = "File System Access API unavailable";
-  } else {
-    els.intelFolderStatus.textContent = wasIntelligenceSetupSkipped()
-      ? "No vault — click 📁 to set intelligence folder"
-      : "Pick a parent folder → creates GRIMOIRE-FocusIntelligence/";
-    els.intelFolderStatus.className = "intel-folder-status";
-    els.btnIntelFolder.classList.remove("ready");
-    els.btnIntelFolder.title = "Set / change Intelligence Folder";
+    return;
   }
+  const health = await getVaultHealth();
+  applyVaultHealthToDom(health);
 }
 
 async function onChooseIntelFolder() {
@@ -9875,6 +9917,7 @@ async function onChooseIntelFolder() {
     }
 
     persist();
+    await refreshIntelFolderUi();
     toast(`Vault ready: ${handle.name}/`, "success");
     activityPing(`✦ Vault linked: ${handle.name}/`);
 
@@ -9910,9 +9953,30 @@ async function onChooseIntelFolder() {
     }
     renderAll();
   } catch (err) {
-    if (err?.name === "AbortError") return;
+    if (err?.name === "AbortError") {
+      console.debug("[vault] broken", { reason: "picker-cancel" });
+      let health = { state: VAULT_HEALTH.UNLINKED, captureDisabled: true, folderName: null };
+      try {
+        health = await getVaultHealth();
+      } catch {
+        /* ignore */
+      }
+      if (health.state === VAULT_HEALTH.LINKED) {
+        await refreshIntelFolderUi();
+        return;
+      }
+      applyVaultHealthToDom({
+        state: VAULT_HEALTH.UNLINKED,
+        captureDisabled: true,
+        folderName: health.folderName || null,
+        handle: health.handle || null,
+      });
+      toast("Vault unlinked — intelligence capture disabled", "");
+      return;
+    }
     console.error("[vault] choose folder failed", err);
-    setVaultFailState(true);
+    console.debug("[vault] broken", { error: String(err?.message || err) });
+    applyVaultHealthToDom({ state: VAULT_HEALTH.ERROR, folderName: null });
     const detail = String(err?.message || err?.name || err || "unknown error").slice(0, 120);
     toast(`Could not open folder: ${detail}`, "");
   }
@@ -9928,15 +9992,29 @@ async function bootstrapIntelligenceVault() {
     return;
   }
   try {
+    const health = await getVaultHealth();
+    applyVaultHealthToDom(health);
+
+    if (health.state === VAULT_HEALTH.LINKED) {
+      toast(health.folderName ? `Vault ready: ${health.folderName}/` : "Vault ready", "success");
+    } else if (health.state === VAULT_HEALTH.UNLINKED) {
+      toast("Vault unlinked — click 📁 to restore", "");
+    } else if (health.state === VAULT_HEALTH.ERROR) {
+      toast("Vault error — click 📁 to restore", "");
+    }
+    // NEVER: existing setup prompt in the status bar — no silent pass, no extra toast
+
     // forcePrompt: false → restore from IndexedDB only; no OS picker on load
-    const handle = await ensureIntelligenceFolder({ forcePrompt: false });
+    const handle =
+      health.state === VAULT_HEALTH.LINKED
+        ? health.handle
+        : await ensureIntelligenceFolder({ forcePrompt: false });
     await refreshIntelFolderUi();
 
     const cell2 = ensureCell2CoreFocus(state);
-    if (cell2) await ensureCell2IntelligenceFile(cell2);
+    if (cell2 && handle) await ensureCell2IntelligenceFile(cell2);
 
     if (handle) {
-      // Previously linked vault restored — quiet seed, no toast spam
       for (const c of state.conversations) {
         if (isCell2CoreFocus(c)) continue;
         if (!Array.isArray(c.intelLog) || c.intelLog.length === 0) {
@@ -9950,11 +10028,9 @@ async function bootstrapIntelligenceVault() {
         }
       }
       await updateScrollListIndex(state.conversations, state.spells);
-      // Do NOT mark all focuses vault-linked — per-focus paths only
       persist();
       renderConvoList();
     }
-    // Warm per-focus handles for any focus already flagged vaultLinked
     for (const c of state.conversations || []) {
       if (c?.id && (c.vaultLinked || isFocusVaultLinked(c.id))) {
         try {
@@ -9964,13 +10040,23 @@ async function bootstrapIntelligenceVault() {
         }
       }
     }
-    // Not linked: leave path-onboarding callouts / Create my path for user click
   } catch (err) {
+    console.debug("[vault] broken", { error: String(err?.message || err), source: "boot" });
     if (err?.name === "SecurityError" || /user gesture/i.test(String(err?.message || ""))) {
       console.warn("[vault] boot restore skipped picker (needs user gesture)");
     } else if (err?.name !== "AbortError") {
       console.warn(err);
     }
+    try {
+      applyVaultHealthToDom({
+        state: VAULT_HEALTH.UNLINKED,
+        folderName: null,
+        needsRelink: true,
+      });
+    } catch {
+      /* ignore */
+    }
+    toast("Vault unlinked — click 📁 to restore", "");
     await refreshIntelFolderUi();
   }
 }
@@ -10816,7 +10902,7 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-007";
+window.__grimoireBootVersion = "exec-009";
 window.__selectFocusByName = function selectFocusByName(name) {
   const q = String(name || "").trim().toLowerCase();
   if (!q) return false;
@@ -11708,16 +11794,24 @@ async function hydrateSettingsForm() {
   if (els.settingsAutoForge) els.settingsAutoForge.checked = Boolean(settings.autoForge);
   let vaultLabel = settings.vaultFolderHint || "";
   try {
-    const live = await getFolderLabel();
-    if (live) vaultLabel = live;
+    const health = await getVaultHealth();
+    applyVaultHealthToDom(health);
+    if (health.folderName) vaultLabel = health.folderName;
   } catch {
-    /* ignore */
+    try {
+      const live = await getFolderLabel();
+      if (live) vaultLabel = live;
+    } catch {
+      /* ignore */
+    }
+    if (els.settingsVaultStatus) {
+      els.settingsVaultStatus.textContent = vaultLabel
+        ? `Linked: ${vaultLabel}`
+        : "Not linked — click 📁 in the sidebar.";
+    }
   }
-  if (els.settingsVaultPath) els.settingsVaultPath.value = vaultLabel;
-  if (els.settingsVaultStatus) {
-    els.settingsVaultStatus.textContent = vaultLabel
-      ? `Linked: ${vaultLabel}`
-      : "Not linked — click 📁 in the sidebar.";
+  if (els.settingsVaultPath && !String(els.settingsVaultPath.value || "").trim()) {
+    els.settingsVaultPath.value = vaultLabel;
   }
   renderSettingsRoadmapStatus();
 }

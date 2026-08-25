@@ -3091,6 +3091,35 @@ export const FOCUS_RESET_GEN_KEY = "grimoire-focus-reset-generation";
 export const FOCUS_RESET_GENERATION = 1;
 export const FOCUS_MAX_DEPTH = 3;
 
+/** IndexedDB key for the File System Access vault handle (Directive 009). */
+export const VAULT_HANDLE_IDB_KEY = "grimoire-vault-handle-v1";
+/** Vault health for status bar / boot check — never silent. */
+export const VAULT_HEALTH = Object.freeze({
+  LINKED: "linked",
+  UNLINKED: "unlinked",
+  ERROR: "error",
+  NEVER: "never",
+});
+
+/** Status-bar copy for a vault health snapshot. */
+export function vaultStatusLabel(health) {
+  const state = health?.state || VAULT_HEALTH.NEVER;
+  const name = String(health?.folderName || "").trim();
+  if (state === VAULT_HEALTH.LINKED) {
+    return name ? `Vault ready · ${name}/` : "Vault ready";
+  }
+  if (state === VAULT_HEALTH.ERROR) {
+    return "Vault error — click 📁 to restore";
+  }
+  if (state === VAULT_HEALTH.UNLINKED) {
+    if (health?.captureDisabled) {
+      return "Vault unlinked — intelligence capture disabled";
+    }
+    return "Vault unlinked — click 📁 to restore";
+  }
+  return "Pick a parent folder → creates GRIMOIRE-FocusIntelligence/";
+}
+
 /** Operator settings — localStorage only, no cloud. */
 export const DEFAULT_APP_SETTINGS = Object.freeze({
   displayName: "",
@@ -6578,7 +6607,7 @@ export async function buildSpellCrafterContext(convo) {
   let experiences = [];
   let nodes = [];
   try {
-    const intel = await import("./intelligence.js?v=exec-007");
+    const intel = await import("./intelligence.js?v=exec-009");
     if (typeof intel.readAllEntitiesFromVault === "function") {
       entities = (await intel.readAllEntitiesFromVault()) || [];
     }

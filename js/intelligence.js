@@ -40,6 +40,8 @@ import {
   isRetiredAiNode,
   isRetiredEntity,
   GLYPH_DICTIONARY_DIR,
+  VAULT_HANDLE_IDB_KEY,
+  VAULT_HEALTH,
 } from "./data.js";
 import { computeFocusHealth } from "./health.js";
 
@@ -52,7 +54,7 @@ let scrollListMemoryNodes = [];
 
 const IDB_NAME = "grimoire-intel-v1";
 const IDB_STORE = "handles";
-/** @deprecated global key — kept for backward compat only */
+/** @deprecated global key — kept for backward compat; v1 key is VAULT_HANDLE_IDB_KEY */
 const IDB_KEY = "intelligence-dir";
 /** @deprecated global LS — do not gate per-focus onboarding on this */
 const LS_SETUP = "grimoire-intel-folder-ready";
@@ -128,28 +130,43 @@ export function isFocusVaultLinked(focusId) {
 /**
  * Resolve per-focus vault directory handle (IndexedDB + permission).
  */
-export async function resolveFocusFolderHandle(focusId) {
+export async function resolveFocusFolderHandle(focusId, { requestIfPrompt = false } = {}) {
   const id = String(focusId || "").trim();
   if (!id) return null;
+
+  async function accept(handle) {
+    if (!handle) return null;
+    const perm = await queryVaultPermission(handle);
+    if (perm === "granted") return handle;
+    if (requestIfPrompt) {
+      const ok = await ensurePermission(handle);
+      return ok ? handle : null;
+    }
+    return null;
+  }
+
   if (focusDirHandles.has(id)) {
-    const h = focusDirHandles.get(id);
-    const ok = await ensurePermission(h);
-    if (ok) return h;
-    focusDirHandles.delete(id);
+    const got = await accept(focusDirHandles.get(id));
+    if (got) return got;
   }
   try {
     const stored = await idbGet(focusIntelIdbKey(id));
     if (!stored) return null;
-    const ok = await ensurePermission(stored);
-    if (!ok) return null;
     focusDirHandles.set(id, stored);
-    try {
-      localStorage.setItem(focusIntelLsReadyKey(id), "1");
-    } catch {
-      /* ignore */
+    console.debug("[vault] restore", { focusId: id, name: stored.name || "" });
+    const got = await accept(stored);
+    if (got) {
+      try {
+        localStorage.setItem(focusIntelLsReadyKey(id), "1");
+      } catch {
+        /* ignore */
+      }
+      return stored;
     }
-    return stored;
-  } catch {
+    console.debug("[vault] broken", { focusId: id, name: stored.name || "", reason: "permission" });
+    return null;
+  } catch (err) {
+    console.debug("[vault] restore", { focusId: id, error: String(err?.message || err) });
     return null;
   }
 }
@@ -173,6 +190,7 @@ export async function setFocusFolderHandle(focusId, handle, folderName = "") {
     // Still usable this session via memory cache
     console.warn("setFocusFolderHandle persist", err);
   }
+  console.debug("[vault] linked", { focusId: id, name: folderName || handle.name || "", source: "focus" });
   return true;
 }
 
@@ -361,15 +379,25 @@ export async function chooseIntelligenceFolder() {
     throw new Error("File System Access API not available — use Chrome or Edge");
   }
 
+  // After refresh, Chromium keeps the IDB handle but permission is "prompt".
+  // A click is a user gesture — re-grant the stored handle instead of picking twice.
+  try {
+    const health = await getVaultHealth();
+    if (health.state !== VAULT_HEALTH.LINKED && health.handle) {
+      const relinked = await relinkStoredVaultHandle();
+      if (relinked) return relinked;
+    }
+  } catch (err) {
+    console.debug("[vault] relink-skip", err);
+  }
+
   const parent = await pickDirectoryHandle();
   const handle = await resolveWritableVaultDir(parent, INTEL_DIR_NAME);
 
-  dirHandle = handle;
   try {
-    await idbSet(IDB_KEY, handle);
-    localStorage.setItem(LS_SETUP, "1");
-    localStorage.setItem(LS_NAME, handle.name || INTEL_DIR_NAME);
+    await persistGlobalHandle(handle);
   } catch (err) {
+    dirHandle = handle;
     console.warn("global vault idb persist", err);
   }
   try {
@@ -556,29 +584,163 @@ async function writeReadme(handle) {
   }
 }
 
-export async function restoreIntelligenceFolder() {
+export async function queryVaultPermission(handle) {
+  if (!handle) return "denied";
+  try {
+    if (typeof handle.queryPermission !== "function") return "granted";
+    return await handle.queryPermission({ mode: "readwrite" });
+  } catch {
+    return "denied";
+  }
+}
+
+async function persistGlobalHandle(handle) {
+  if (!handle) return false;
+  dirHandle = handle;
+  try {
+    await idbSet(IDB_KEY, handle);
+    await idbSet(VAULT_HANDLE_IDB_KEY, handle);
+    localStorage.setItem(LS_SETUP, "1");
+    localStorage.setItem(LS_NAME, handle.name || INTEL_DIR_NAME);
+  } catch (err) {
+    console.warn("[vault] persist", err);
+  }
+  console.debug("[vault] linked", { name: handle.name || INTEL_DIR_NAME, source: "persist" });
+  return true;
+}
+
+/** Load handle from memory / IndexedDB without requesting permission (boot-safe). */
+export async function loadStoredVaultHandle() {
   if (dirHandle) {
-    const ok = await ensurePermission(dirHandle);
-    return ok ? dirHandle : null;
+    console.debug("[vault] restore", { source: "memory", name: dirHandle.name || "" });
+    return dirHandle;
   }
   try {
-    const stored = await idbGet(IDB_KEY);
-    if (!stored) return null;
-    const ok = await ensurePermission(stored);
-    if (!ok) return null;
+    const stored = (await idbGet(VAULT_HANDLE_IDB_KEY)) || (await idbGet(IDB_KEY));
+    if (!stored) {
+      console.debug("[vault] restore", { source: "idb", found: false });
+      return null;
+    }
     dirHandle = stored;
-    localStorage.setItem(LS_SETUP, "1");
-    return dirHandle;
-  } catch {
+    console.debug("[vault] restore", { source: "idb", name: stored.name || "" });
+    return stored;
+  } catch (err) {
+    console.debug("[vault] restore", { error: String(err?.message || err) });
     return null;
   }
+}
+
+/**
+ * Health check: linked | unlinked | error | never.
+ * Never requests permission (safe on app load).
+ */
+export async function getVaultHealth() {
+  if (!hasDirectoryPicker()) {
+    console.debug("[vault] broken", { reason: "no-directory-picker" });
+    return {
+      state: VAULT_HEALTH.ERROR,
+      handle: null,
+      folderName: null,
+      permission: "denied",
+    };
+  }
+  let folderName = null;
+  try {
+    folderName = localStorage.getItem(LS_NAME) || null;
+  } catch {
+    /* ignore */
+  }
+  const handle = await loadStoredVaultHandle();
+  if (handle?.name) folderName = handle.name;
+  const sawReady =
+    Boolean(handle) ||
+    Boolean(folderName) ||
+    (() => {
+      try {
+        return localStorage.getItem(LS_SETUP) === "1";
+      } catch {
+        return false;
+      }
+    })();
+
+  if (handle) {
+    const permission = await queryVaultPermission(handle);
+    if (permission === "granted") {
+      dirHandle = handle;
+      try {
+        localStorage.setItem(LS_SETUP, "1");
+      } catch {
+        /* ignore */
+      }
+      console.debug("[vault] linked", { name: handle.name || folderName, source: "health" });
+      return {
+        state: VAULT_HEALTH.LINKED,
+        handle,
+        folderName: handle.name || folderName,
+        permission,
+      };
+    }
+    console.debug("[vault] broken", {
+      name: handle.name || folderName,
+      permission,
+      reason: "needs-relink",
+    });
+    return {
+      state: VAULT_HEALTH.UNLINKED,
+      handle,
+      folderName: handle.name || folderName,
+      permission,
+      needsRelink: true,
+    };
+  }
+
+  if (sawReady) {
+    console.debug("[vault] broken", { reason: "handle-missing", folderName });
+    return {
+      state: VAULT_HEALTH.UNLINKED,
+      handle: null,
+      folderName,
+      permission: null,
+      needsRelink: true,
+    };
+  }
+  return {
+    state: VAULT_HEALTH.NEVER,
+    handle: null,
+    folderName: null,
+    permission: null,
+  };
+}
+
+/**
+ * User-gesture re-link: requestPermission on the stored handle.
+ * Returns the handle when granted; null if the user must pick again.
+ */
+export async function relinkStoredVaultHandle() {
+  const handle = await loadStoredVaultHandle();
+  if (!handle) return null;
+  const ok = await ensurePermission(handle);
+  if (ok) {
+    await persistGlobalHandle(handle);
+    console.debug("[vault] linked", { name: handle.name || "", source: "relink" });
+    return handle;
+  }
+  console.debug("[vault] broken", { name: handle.name || "", source: "relink-denied" });
+  return null;
+}
+
+export async function restoreIntelligenceFolder() {
+  const health = await getVaultHealth();
+  if (health.state === VAULT_HEALTH.LINKED && health.handle) return health.handle;
+  return null;
 }
 
 async function ensurePermission(handle) {
   if (!handle) return false;
   try {
-    const q = await handle.queryPermission({ mode: "readwrite" });
+    const q = await queryVaultPermission(handle);
     if (q === "granted") return true;
+    if (typeof handle.requestPermission !== "function") return false;
     const r = await handle.requestPermission({ mode: "readwrite" });
     return r === "granted";
   } catch {
@@ -590,6 +752,7 @@ export async function clearIntelligenceFolder() {
   dirHandle = null;
   try {
     await idbSet(IDB_KEY, null);
+    await idbSet(VAULT_HANDLE_IDB_KEY, null);
     localStorage.removeItem(LS_SETUP);
     localStorage.removeItem(LS_NAME);
   } catch {
@@ -3707,9 +3870,13 @@ function downloadMarkdown(fileName, content) {
 }
 
 export async function getFolderLabel() {
-  const h = dirHandle || (await restoreIntelligenceFolder());
-  if (!h) return null;
-  return h.name || localStorage.getItem(LS_NAME) || INTEL_DIR_NAME;
+  const h = dirHandle || (await loadStoredVaultHandle());
+  if (h?.name) return h.name;
+  try {
+    return localStorage.getItem(LS_NAME) || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function ensureFocusFile(focus, spells = []) {

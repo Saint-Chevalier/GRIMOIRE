@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-007" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-007" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-009" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-009" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -95,7 +95,7 @@
           </div>
         </div>
       </header>
-      <p class="intel-folder-status" id="intel-folder-status">Pick a folder — creates GRIMOIRE-FocusIntelligence/</p>
+      <p class="intel-folder-status" id="intel-folder-status" role="status" aria-live="polite" data-vault-state="never">Pick a folder — creates GRIMOIRE-FocusIntelligence/</p>
 
       <div class="sidebar-section-label">FOCUSES</div>
       <div class="focus-org-toolbar" id="focus-org-toolbar">
@@ -760,7 +760,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-007"></script>
+  <script type="module" src="js/app.js?v=exec-009"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1100,8 +1100,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-007");
-          const intelMod = await import("./js/intelligence.js?v=exec-007");
+          const dataMod = await import("./js/data.js?v=exec-009");
+          const intelMod = await import("./js/intelligence.js?v=exec-009");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1337,7 +1337,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-007");
+          const intelMod = await import("./js/intelligence.js?v=exec-009");
           const audit = Object.assign(
             {
               focuses: [],
