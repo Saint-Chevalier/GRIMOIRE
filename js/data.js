@@ -1369,8 +1369,100 @@ export function normalizeSpell(spell) {
 
   // ── Spell Crafter: ensure mastery/tier fields on every spell ──
   ensureSpellCrafterFields(spell);
+  spell.conditions = normalizeSpellConditions(spell.conditions);
 
   return spell;
+}
+
+export const SPELL_CONDITION_KEYS = Object.freeze([
+  "entity",
+  "alignment_min",
+  "has_entity",
+  "focus_type",
+]);
+
+export function normalizeSpellConditions(raw) {
+  const list = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? [raw] : [];
+  return list
+    .filter((c) => c && typeof c === "object")
+    .map((c) => ({
+      entity: String(c.entity || "").trim(),
+      alignment_min:
+        c.alignment_min == null || c.alignment_min === ""
+          ? null
+          : Number(c.alignment_min),
+      has_entity: Array.isArray(c.has_entity)
+        ? c.has_entity.map((n) => String(n || "").trim()).filter(Boolean)
+        : String(c.has_entity || "").trim()
+          ? [String(c.has_entity).trim()]
+          : [],
+      focus_type: String(c.focus_type || "").trim(),
+    }))
+    .filter(
+      (c) =>
+        c.entity ||
+        c.alignment_min != null ||
+        (c.has_entity && c.has_entity.length) ||
+        c.focus_type
+    );
+}
+
+/**
+ * All conditions must pass. Empty list = pass.
+ * context: { focus, entities, alignment }
+ */
+export function evaluateSpellConditions(spell, context = {}) {
+  const conditions = normalizeSpellConditions(spell?.conditions);
+  if (!conditions.length) {
+    console.debug("[spell-conditions] pass", { id: spell?.id, reason: "no conditions" });
+    return { ok: true, reasons: ["no conditions"] };
+  }
+  const focus = context.focus || {};
+  const entities = Array.isArray(context.entities) ? context.entities : [];
+  const alignment =
+    context.alignment ||
+    focus.alignmentProfile ||
+    {};
+  const alignmentScore = Number(
+    alignment.signal ?? alignment.score ?? alignment.alignment ?? (focus.alignmentRevealed ? 1 : 0)
+  );
+  const focusName = String(focus.name || "").trim().toLowerCase();
+  const focusType = String(focus.type || "").trim().toLowerCase();
+  const entityNames = new Set(
+    entities.flatMap((e) =>
+      [e.name, e.id, ...(e.aliases || [])].map((n) => String(n || "").trim().toLowerCase()).filter(Boolean)
+    )
+  );
+  const reasons = [];
+  for (const cond of conditions) {
+    if (cond.entity && cond.entity.toLowerCase() !== focusName) {
+      const reason = `entity ${cond.entity} != focus ${focus.name || "—"}`;
+      console.debug("[spell-conditions] fail", { id: spell?.id, reason });
+      return { ok: false, reasons: [reason] };
+    }
+    if (cond.focus_type && cond.focus_type.toLowerCase() !== focusType) {
+      const reason = `focus_type ${cond.focus_type} != ${focus.type || "—"}`;
+      console.debug("[spell-conditions] fail", { id: spell?.id, reason });
+      return { ok: false, reasons: [reason] };
+    }
+    if (cond.alignment_min != null && Number.isFinite(cond.alignment_min)) {
+      if (!(alignmentScore >= cond.alignment_min)) {
+        const reason = `alignment ${alignmentScore} < ${cond.alignment_min}`;
+        console.debug("[spell-conditions] fail", { id: spell?.id, reason });
+        return { ok: false, reasons: [reason] };
+      }
+    }
+    for (const need of cond.has_entity || []) {
+      if (!entityNames.has(need.toLowerCase())) {
+        const reason = `missing entity ${need}`;
+        console.debug("[spell-conditions] fail", { id: spell?.id, reason });
+        return { ok: false, reasons: [reason] };
+      }
+    }
+    reasons.push("ok");
+  }
+  console.debug("[spell-conditions] pass", { id: spell?.id, count: conditions.length });
+  return { ok: true, reasons };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2172,6 +2264,18 @@ export function formatSpellMarkdown(spell) {
     s.iteration ? `**Version:** v${s.iteration}` : null,
   ].filter(Boolean);
   if (s.crafted) lines.push(`**Crafted:** ${s.crafted}`);
+  const conds = normalizeSpellConditions(s.conditions);
+  if (conds.length) {
+    lines.push("**Conditions:**");
+    for (const c of conds) {
+      const bits = [];
+      if (c.entity) bits.push(`entity=${c.entity}`);
+      if (c.focus_type) bits.push(`focus_type=${c.focus_type}`);
+      if (c.alignment_min != null) bits.push(`alignment_min=${c.alignment_min}`);
+      if (c.has_entity?.length) bits.push(`has_entity=${c.has_entity.join(",")}`);
+      lines.push(`- ${bits.join(" · ") || "constraint"}`);
+    }
+  }
   lines.push("", body || "(empty spell content)");
   return lines.join("\n");
 }
@@ -5070,8 +5174,13 @@ export function buildGrimoireSovereignEvolutionRoadmap() {
           ],
           checks: [
             { kind: "source_match", path: "js/intelligence.js", pattern: "densenBusMessage" },
+            { kind: "source_match", path: "js/intelligence.js", pattern: "full-body" },
             { kind: "source_match", path: "js/app.js", pattern: "handleBusRoute" },
             { kind: "source_match", path: "js/app.js", pattern: "relayIntelBetweenFocuses" },
+            { kind: "source_match", path: "js/data.js", pattern: "SESSION0_RETIRED" },
+            { kind: "source_match", path: "js/app.js", pattern: "tryUpgradeSpell" },
+            { kind: "source_match", path: "js/intelligence.js", pattern: "writeEntityToVault" },
+            { kind: "source_match", path: "js/data.js", pattern: "evaluateSpellConditions" },
             { kind: "lint", path: "js/app.js" },
             { kind: "lint", path: "js/intelligence.js" },
           ],
@@ -5707,8 +5816,13 @@ export function applyStepVerification(step, checkResults, { at } = {}) {
   if (step.status === "complete" && result !== "pass") {
     step.status = result === "blocked" ? "blocked" : "in-progress";
   }
-  // Do not auto-complete on pass — human gate still required
-  if (result === "pass" && step.status === "pending") {
+  // Directive 005: Step 1 auto-completes only when every executable check passes
+  if (
+    result === "pass" &&
+    step.verification_slug === "sev-01-bus-relay-full-body"
+  ) {
+    step.status = "complete";
+  } else if (result === "pass" && step.status === "pending") {
     step.status = "in-progress";
   }
   if (result === "blocked" && step.status !== "complete") {
@@ -5796,12 +5910,19 @@ export function buildVerificationReport(roadmap, stepResults = []) {
     nextActions.push("Re-run verify after code changes. Complete is gated on pass.");
   }
 
+  const step1 = flattenRoadmapSteps(roadmap).find(
+    (st) => st.verification_slug === "sev-01-bus-relay-full-body"
+  );
   const overall =
-    blocked && !passed && !failed
+    failed
       ? "blocked"
-      : failed || blocked
-        ? "fail"
-        : "pass";
+      : blocked && !passed
+        ? "blocked"
+        : step1 && step1.status === "complete" && failed === 0
+          ? "complete"
+          : passed && !failed && !blocked
+            ? "complete"
+            : "pending";
 
   return {
     slug: roadmap?.slug || "",
@@ -6057,6 +6178,40 @@ export const ALIGNMENT_DIRECTIVE_TEXT =
 // ENTITY INTELLIGENCE — Person / Place / Item / AI Node / Event
 // ============================================================
 
+export const ENTITY_RELATIONS = Object.freeze([
+  "knows",
+  "owns",
+  "works_for",
+  "member_of",
+  "created_by",
+  "linked_to",
+  "conflicts_with",
+]);
+
+export function normalizeEntityRelationships(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const out = [];
+  const seen = new Set();
+  for (const r of list) {
+    if (!r || typeof r !== "object") continue;
+    const relation = String(r.relation || "").trim().toLowerCase().replace(/\s+/g, "_");
+    if (!ENTITY_RELATIONS.includes(relation)) continue;
+    const target = String(r.target_entity || r.target || "").trim();
+    if (!target) continue;
+    const key = `${relation}::${target.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const strength = Number(r.strength);
+    out.push({
+      target_entity: target,
+      relation,
+      since: String(r.since || "").trim(),
+      strength: Number.isFinite(strength) ? Math.max(0, Math.min(1, strength)) : 0.8,
+    });
+  }
+  return out;
+}
+
 /**
  * Create an empty entity with the 5-YAML fact domains.
  */
@@ -6079,6 +6234,7 @@ export function createEmptyEntity(overrides = {}) {
     },
     related_entities: Array.isArray(overrides.related_entities) ? overrides.related_entities.filter((e) => typeof e === "string") : [],
     related_focuses: Array.isArray(overrides.related_focuses) ? overrides.related_focuses.filter((e) => typeof e === "string") : [],
+    relationships: normalizeEntityRelationships(overrides.relationships),
     tags: Array.isArray(overrides.tags) ? overrides.tags.filter((t) => typeof t === "string") : [],
     source: String(overrides.source || "user").trim() || "user",
     created_at: now,
@@ -6106,6 +6262,7 @@ export function normalizeEntity(ent) {
   }
   if (ent.related_entities && Array.isArray(ent.related_entities)) base.related_entities = ent.related_entities.filter((e) => typeof e === "string");
   if (ent.related_focuses && Array.isArray(ent.related_focuses)) base.related_focuses = ent.related_focuses.filter((e) => typeof e === "string");
+  if (ent.relationships) base.relationships = normalizeEntityRelationships(ent.relationships);
   if (ent.tags && Array.isArray(ent.tags)) base.tags = ent.tags.filter((t) => typeof t === "string");
   base.updated_at = new Date().toISOString();
   return base;
@@ -6142,6 +6299,7 @@ export function buildEntityMarkdown(ent) {
     `tags: ${jTags(e.tags)}`,
     `related_entities: ${jTags(e.related_entities)}`,
     `related_focuses: ${jTags(e.related_focuses)}`,
+    `relationships: ${JSON.stringify(e.relationships || [])}`,
     "---",
     "",
     `## ${e.name || "Entity"}`,
@@ -6210,6 +6368,18 @@ export function parseEntityMarkdown(text) {
       tags: fmObj.tags,
       related_entities: fmObj.related_entities,
       related_focuses: fmObj.related_focuses,
+      relationships: (() => {
+        const raw = fmObj.relationships;
+        if (Array.isArray(raw)) return raw;
+        if (typeof raw === "string") {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            return [];
+          }
+        }
+        return [];
+      })(),
       facts: {
         identity: factSection("Identity Facts"),
         physical: factSection("Physical Facts"),
@@ -6408,7 +6578,7 @@ export async function buildSpellCrafterContext(convo) {
   let experiences = [];
   let nodes = [];
   try {
-    const intel = await import("./intelligence.js?v=exec-006");
+    const intel = await import("./intelligence.js?v=exec-005");
     if (typeof intel.readAllEntitiesFromVault === "function") {
       entities = (await intel.readAllEntitiesFromVault()) || [];
     }

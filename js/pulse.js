@@ -168,7 +168,7 @@ export async function writeBreatheEntry({ focusId, text, context = {} }) {
 
   // Best-effort append through existing intelligence writer if available
   try {
-    const mod = await import("./intelligence.js?v=exec-006");
+    const mod = await import("./intelligence.js?v=exec-005");
     if (typeof mod.appendEntityIntelligence === "function") {
       await mod.appendEntityIntelligence(
         formatBreatheBody(entry),

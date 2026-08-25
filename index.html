@@ -21,8 +21,8 @@
     }
     #grimoire-boot .boot-sub { font-size: 0.85rem; color: #8b93b8; max-width: 28rem; line-height: 1.45; }
   </style>
-  <link rel="stylesheet" href="css/styles.css?v=exec-006" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-006" /></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=exec-005" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="css/styles.css?v=exec-005" /></noscript>
 </head>
 <body>
   <div id="grimoire-boot" role="status" aria-live="polite">
@@ -313,6 +313,7 @@
         <button type="button" class="intel-audit-tab" data-tab="focuses" id="tab-audit-focuses">Focuses</button>
         <button type="button" class="intel-audit-tab" data-tab="scroll" id="tab-audit-scroll">Scroll Nodes</button>
         <button type="button" class="intel-audit-tab" data-tab="bus" id="tab-audit-bus">Bus Activity</button>
+        <button type="button" class="intel-audit-tab" data-tab="timeline" id="tab-audit-timeline">Timeline</button>
         <button type="button" class="intel-audit-tab" data-tab="glyphs" id="tab-audit-glyphs">Glyphs</button>
       </div>
       <div class="intel-audit-content" id="intel-audit-content">
@@ -333,6 +334,9 @@
         </div>
         <div class="intel-audit-tab-panel" data-panel="bus" id="panel-audit-bus" hidden>
           <div class="intel-audit-empty">Loading bus activity…</div>
+        </div>
+        <div class="intel-audit-tab-panel" data-panel="timeline" id="panel-audit-timeline" hidden>
+          <div class="intel-audit-empty">Loading timeline…</div>
         </div>
         <div class="intel-audit-tab-panel" data-panel="glyphs" id="panel-audit-glyphs" hidden>
           <div class="intel-audit-empty">Loading glyphs…</div>
@@ -747,7 +751,7 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js?v=exec-006"></script>
+  <script type="module" src="js/app.js?v=exec-005"></script>
   <!--
     Emergency boot (non-module): works even if app.js ES module fails to load.
     Paints focuses from localStorage + Create persists + reloads.
@@ -1087,8 +1091,8 @@
         };
 
         try {
-          const dataMod = await import("./js/data.js?v=exec-006");
-          const intelMod = await import("./js/intelligence.js?v=exec-006");
+          const dataMod = await import("./js/data.js?v=exec-005");
+          const intelMod = await import("./js/intelligence.js?v=exec-005");
           const md = dataMod.buildExperienceMarkdown(payload);
           const parsed = dataMod.parseExperienceMarkdown(md);
           const titleOk = parsed.title === payload.title;
@@ -1238,7 +1242,7 @@
           overview.innerHTML = '<div class="intel-audit-empty">Loading vault overview…</div>';
         }
         try {
-          const intelMod = await import("./js/intelligence.js?v=exec-006");
+          const intelMod = await import("./js/intelligence.js?v=exec-005");
           const audit = Object.assign(
             {
               focuses: [],
@@ -1373,6 +1377,22 @@
                             ? `<button type="button" class="btn-retire-entity" disabled>Retired</button>`
                             : ""
                       }
+                      <div class="entity-rel-block">
+                        <div class="entity-rel-title">Relationships</div>
+                        <ul class="entity-rel-list">${
+                          (selected.relationships || []).length
+                            ? (selected.relationships || []).map((r) =>
+                                `<li data-rel-target="${r.target_entity}" data-rel-kind="${r.relation}">${r.relation} → ${r.target_entity}${r.since ? " · " + r.since : ""} <button type="button" class="btn-rel-remove" data-rel-target="${r.target_entity}" data-rel-kind="${r.relation}">remove</button></li>`
+                              ).join("")
+                            : "<li class=\"contrib-empty\">None yet.</li>"
+                        }</ul>
+                        <div class="entity-rel-add">
+                          <input id="rel-target" type="text" placeholder="Target entity" />
+                          <select id="rel-kind">${["knows","owns","works_for","member_of","created_by","linked_to","conflicts_with"].map((k) => `<option value="${k}">${k}</option>`).join("")}</select>
+                          <button type="button" class="btn-primary btn-sm" id="btn-rel-add">Add</button>
+                        </div>
+                      </div>
+                      }
                     </div>`
                   : "");
               entityList.querySelectorAll(".experience-item[data-entity-id]").forEach((row) => {
@@ -1409,7 +1429,49 @@
                   }
                 });
               }
+              const addRel = document.getElementById("btn-rel-add");
+              if (addRel && selected) {
+                addRel.addEventListener("click", async () => {
+                  const target = (document.getElementById("rel-target") || {}).value || "";
+                  const relation = (document.getElementById("rel-kind") || {}).value || "knows";
+                  if (!String(target).trim()) return;
+                  await intelMod.addEntityRelationship(selected, {
+                    target_entity: String(target).trim(),
+                    relation,
+                    since: new Date().toISOString().slice(0, 7),
+                    strength: 0.8,
+                  });
+                  await renderIntelAudit();
+                });
+              }
+              entityList.querySelectorAll(".btn-rel-remove").forEach((btn) => {
+                btn.addEventListener("click", async (ev) => {
+                  ev.stopPropagation();
+                  if (!selected) return;
+                  await intelMod.removeEntityRelationship(selected, {
+                    target_entity: btn.getAttribute("data-rel-target"),
+                    relation: btn.getAttribute("data-rel-kind"),
+                  });
+                  await renderIntelAudit();
+                });
+              });
             }
+          }
+
+          const allRels = (Array.isArray(audit.entities) ? audit.entities : []).flatMap((e) =>
+            (e.relationships || []).map((r) => ({ from: e.name, ...r }))
+          );
+          const entityListEl = document.getElementById("panel-audit-entities");
+          if (allRels.length && entityListEl) {
+            const relVis = document.createElement("div");
+            relVis.className = "entity-rel-graph";
+            relVis.innerHTML =
+              "<div class=\"entity-rel-title\">Relationship map</div>" +
+              allRels
+                .slice(0, 40)
+                .map((r) => `<div class="entity-rel-edge">${r.from} —${r.relation}→ ${r.target_entity}</div>`)
+                .join("");
+            entityListEl.appendChild(relVis);
           }
 
           // Bus activity tab
@@ -1426,6 +1488,80 @@
                 </div>
               `).join("");
             }
+          }
+
+          const timelinePanel = document.getElementById("panel-audit-timeline");
+          if (timelinePanel) {
+            const FILTER_KEY = "grimoire-bus-timeline-filters-v1";
+            let filters = { focus: "", entity: "", type: "", from: "", to: "" };
+            try {
+              filters = Object.assign(filters, JSON.parse(localStorage.getItem(FILTER_KEY) || "{}"));
+            } catch (_) {}
+            const events = typeof intelMod.getBusActivityLog === "function"
+              ? intelMod.getBusActivityLog()
+              : (audit.busActivity || []);
+            const filtered = events.filter((evt) => {
+              const ts = evt.timestamp || (evt.ts ? new Date(evt.ts).toISOString() : "");
+              const day = ts.slice(0, 10);
+              const src = String(evt.nodeName || evt.focus || evt.from || "");
+              const kind = String(evt.kind || evt.type || "");
+              const hay = `${src} ${evt.summary || ""} ${evt.detail || ""}`.toLowerCase();
+              if (filters.focus && !src.toLowerCase().includes(filters.focus.toLowerCase())) return false;
+              if (filters.entity && !hay.includes(filters.entity.toLowerCase())) return false;
+              if (filters.type && kind !== filters.type) return false;
+              if (filters.from && day && day < filters.from) return false;
+              if (filters.to && day && day > filters.to) return false;
+              return true;
+            }).slice().reverse();
+            console.debug("[bus-timeline] render", { total: events.length, shown: filtered.length, filters });
+            const kinds = Array.from(new Set(events.map((e) => e.kind || e.type || "route"))).filter(Boolean);
+            timelinePanel.innerHTML = `
+              <div class="bus-timeline-filters">
+                <input id="tl-focus" type="text" placeholder="Focus" value="${filters.focus || ""}" />
+                <input id="tl-entity" type="text" placeholder="Entity" value="${filters.entity || ""}" />
+                <select id="tl-type"><option value="">All types</option>${kinds.map((k) => `<option value="${k}" ${filters.type===k?"selected":""}>${k}</option>`).join("")}</select>
+                <input id="tl-from" type="date" value="${filters.from || ""}" />
+                <input id="tl-to" type="date" value="${filters.to || ""}" />
+              </div>
+              <div class="bus-timeline">
+                ${
+                  filtered.length
+                    ? filtered.map((evt) => {
+                        const ts = evt.timestamp || (evt.ts ? new Date(evt.ts).toISOString() : "");
+                        const src = evt.nodeName || evt.focus || evt.from || "—";
+                        const kind = evt.kind || evt.type || "route";
+                        const preview = String(evt.summary || evt.detail || "").slice(0, 160);
+                        return `<button type="button" class="bus-timeline-item" data-jump="${src}">
+                          <span class="bus-timeline-time">${ts}</span>
+                          <span class="bus-timeline-kind">${kind}</span>
+                          <span class="bus-timeline-src">${src}</span>
+                          <span class="bus-timeline-preview">${preview}</span>
+                        </button>`;
+                      }).join("")
+                    : '<div class="intel-audit-empty">No bus events match these filters.</div>'
+                }
+              </div>`;
+            const persistTl = () => {
+              filters = {
+                focus: (document.getElementById("tl-focus") || {}).value || "",
+                entity: (document.getElementById("tl-entity") || {}).value || "",
+                type: (document.getElementById("tl-type") || {}).value || "",
+                from: (document.getElementById("tl-from") || {}).value || "",
+                to: (document.getElementById("tl-to") || {}).value || "",
+              };
+              try { localStorage.setItem(FILTER_KEY, JSON.stringify(filters)); } catch (_) {}
+              console.debug("[bus-timeline] filter", filters);
+              renderIntelAudit();
+            };
+            ["tl-focus","tl-entity","tl-type","tl-from","tl-to"].forEach((id) => {
+              document.getElementById(id)?.addEventListener("change", persistTl);
+            });
+            timelinePanel.querySelectorAll(".bus-timeline-item").forEach((btn) => {
+              btn.addEventListener("click", () => {
+                const name = btn.getAttribute("data-jump");
+                if (typeof window.__selectFocusByName === "function") window.__selectFocusByName(name);
+              });
+            });
           }
 
           const glyphList = document.getElementById("panel-audit-glyphs");

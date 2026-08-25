@@ -35,6 +35,8 @@ import {
   normalizeEntity,
   buildEntityMarkdown,
   parseEntityMarkdown,
+  ENTITY_RELATIONS,
+  normalizeEntityRelationships,
   isRetiredAiNode,
   isRetiredEntity,
   GLYPH_DICTIONARY_DIR,
@@ -4554,7 +4556,91 @@ export async function autoCaptureEntitiesFromText(text, opts = {}) {
     candidates: candidates.length,
     captured: captured.length,
   });
+  try {
+    await autoCaptureRelationshipsFromText(text, { focusId, existing });
+  } catch (err) {
+    console.debug("[entity-rel] auto-capture skipped", err);
+  }
   return { captured: captured.length, entities: captured };
+}
+
+const REL_PATTERNS = [
+  { relation: "works_for", re: /\b([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40}?)\s+works for\s+([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40})/g },
+  { relation: "knows", re: /\b([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40}?)\s+knows\s+([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40})/g },
+  { relation: "owns", re: /\b([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40}?)\s+owns\s+([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40})/g },
+  { relation: "member_of", re: /\b([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40}?)\s+(?:is )?(?:a )?member of\s+([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40})/g },
+  { relation: "created_by", re: /\b([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40}?)\s+(?:was |is )?created by\s+([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40})/g },
+  { relation: "linked_to", re: /\b([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40}?)\s+(?:is )?linked to\s+([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40})/g },
+  { relation: "conflicts_with", re: /\b([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40}?)\s+conflicts with\s+([A-Z][A-Za-z0-9][A-Za-z0-9 _-]{0,40})/g },
+];
+
+export function detectRelationshipsFromText(text) {
+  const found = [];
+  const src = String(text || "");
+  for (const { relation, re } of REL_PATTERNS) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const from = String(m[1] || "").trim();
+      const to = String(m[2] || "").trim();
+      if (from.length >= 2 && to.length >= 2) {
+        found.push({ from, target_entity: to, relation, since: new Date().toISOString().slice(0, 7), strength: 0.7 });
+      }
+    }
+  }
+  return found;
+}
+
+export async function addEntityRelationship(entity, rel) {
+  const e = normalizeEntity(entity);
+  const next = normalizeEntityRelationships([...(e.relationships || []), rel]);
+  e.relationships = next;
+  console.debug("[entity-rel] add", { id: e.id, relation: rel?.relation, target: rel?.target_entity });
+  return writeEntityToVault(e);
+}
+
+export async function removeEntityRelationship(entity, rel) {
+  const e = normalizeEntity(entity);
+  const target = String(rel?.target_entity || "").trim().toLowerCase();
+  const relation = String(rel?.relation || "").trim().toLowerCase();
+  e.relationships = (e.relationships || []).filter(
+    (r) =>
+      !(
+        String(r.relation || "").toLowerCase() === relation &&
+        String(r.target_entity || "").toLowerCase() === target
+      )
+  );
+  console.debug("[entity-rel] remove", { id: e.id, relation, target });
+  return writeEntityToVault(e);
+}
+
+async function autoCaptureRelationshipsFromText(text, opts = {}) {
+  const hints = detectRelationshipsFromText(text);
+  if (!hints.length) return { captured: 0 };
+  let existing = opts.existing;
+  if (!Array.isArray(existing)) {
+    try {
+      existing = await readAllEntitiesFromVault();
+    } catch {
+      existing = [];
+    }
+  }
+  const byName = new Map(
+    existing.map((e) => [String(e.name || "").trim().toLowerCase(), e])
+  );
+  let captured = 0;
+  for (const hint of hints) {
+    const src = byName.get(hint.from.toLowerCase());
+    if (!src) continue;
+    const result = await addEntityRelationship(src, {
+      target_entity: hint.target_entity,
+      relation: hint.relation,
+      since: hint.since,
+      strength: hint.strength,
+    });
+    if (result?.ok) captured += 1;
+  }
+  return { captured };
 }
 
 function guessEntityType(name, context = "") {

@@ -154,13 +154,16 @@ import {
   canSpawnChildFocus,
   focusBreadcrumbLabel,
   buildFocusDossierMarkdown,
-} from "./data.js?v=exec-006";
+  evaluateSpellConditions,
+  normalizeSpellConditions,
+  ENTITY_RELATIONS,
+} from "./data.js?v=exec-005";
 import {
   randomStarPosition,
   updateConstellation,
   setFocusMetrics,
   liveCapture,
-} from "./stars.js?v=exec-006";
+} from "./stars.js?v=exec-005";
 import {
   initUniverse,
   setFocusUniverse,
@@ -168,7 +171,7 @@ import {
   universeEvent,
   getUniverseHud,
   universeStage,
-} from "./universe.js?v=exec-006";
+} from "./universe.js?v=exec-005";
 import {
   chooseIntelligenceFolder,
   chooseFocusIntelligenceFolder,
@@ -239,19 +242,22 @@ import {
   writeExportDossier,
   readAllEntitiesFromVault,
   readExperiencesFromVault,
-} from "./intelligence.js?v=exec-006";
+  addEntityRelationship,
+  removeEntityRelationship,
+  detectRelationshipsFromText,
+} from "./intelligence.js?v=exec-005";
 import {
   computeFocusHealth,
   healthHudChip,
   healerHealthSpellHint,
-} from "./health.js?v=exec-006";
+} from "./health.js?v=exec-005";
 import {
   detectGap,
   logPulse,
   recordTeleportation,
   enqueueBreathePrompts,
   processBreatheCycle,
-} from "./pulse.js?v=exec-006";
+} from "./pulse.js?v=exec-005";
 
 const SIDEBAR_COLLAPSE_KEY = "grimoire-sidebar-collapsed-v1";
 const UNIVERSE_VIEW_KEY = "grimoire-universe-view-v1";
@@ -3960,6 +3966,23 @@ async function openSpellDetailModal(spell, { sealOnCopy = true, convo = null } =
             : ""
         }
         ${tags ? `<div class="spell-face-tags">${tags}</div>` : ""}
+      </div>
+      <div class="spell-detail-section" id="spell-detail-conditions">
+        <h3>Conditions</h3>
+        ${(() => {
+          const conds = normalizeSpellConditions(spell.conditions);
+          if (!conds.length) return `<p class="contrib-empty">No draft/forge gates on this spell.</p>`;
+          return `<ul class="spell-conditions-list">${conds
+            .map((c) => {
+              const bits = [];
+              if (c.entity) bits.push(`entity: ${c.entity}`);
+              if (c.focus_type) bits.push(`focus type: ${c.focus_type}`);
+              if (c.alignment_min != null) bits.push(`alignment ≥ ${c.alignment_min}`);
+              if (c.has_entity?.length) bits.push(`has entity: ${c.has_entity.join(", ")}`);
+              return `<li>${escapeHtml(bits.join(" · ") || "constraint")}</li>`;
+            })
+            .join("")}</ul>`;
+        })()}
       </div>
       <div class="spell-detail-section">
         <h3>Intelligence contribution</h3>
@@ -8331,6 +8354,15 @@ function generateAndStoreSpell(convo, userText = "", { silentToast = false } = {
   if (isAiNode(convo) && isAlignmentSpell(spell) && convoAlignmentUnlocked(convo)) {
     return { blocked: true, reason: "Alignment already locked — request a directive spell." };
   }
+  const cond = evaluateSpellConditions(spell, {
+    focus: convo,
+    entities: [],
+    alignment: convo.alignmentProfile || {},
+  });
+  if (!cond.ok) {
+    if (!silentToast) toast(`Spell blocked: ${cond.reasons?.[0] || "conditions unmet"}`, "");
+    return { blocked: true, reason: cond.reasons?.[0] || "conditions unmet" };
+  }
   commitSpell(convo, spell, { silentToast });
   return spell;
 }
@@ -8456,6 +8488,15 @@ function stripReceiptSpells(focusId) {
 function commitSpell(convo, spell, { silentToast = false } = {}) {
   if (!convo || !spell || spell.blocked) return;
   if (isReceiptSpell(spell)) return;
+  const cond = evaluateSpellConditions(spell, {
+    focus: convo,
+    entities: [],
+    alignment: convo.alignmentProfile || {},
+  });
+  if (!cond.ok) {
+    if (!silentToast) toast(`Spell blocked: ${cond.reasons?.[0] || "conditions unmet"}`, "");
+    return;
+  }
 
   if (isAlignmentSpell(spell) || convo.alignmentRevealed) {
     stripReceiptSpells(convo.id);
@@ -10775,7 +10816,18 @@ function createConversation({ name, type, model } = {}) {
 window.__createConversation = createConversation;
 // Mark ready as soon as create path is live — emergency shell can hand off
 window.__grimoireAppReady = true;
-window.__grimoireBootVersion = "exec-006";
+window.__grimoireBootVersion = "exec-005";
+window.__selectFocusByName = function selectFocusByName(name) {
+  const q = String(name || "").trim().toLowerCase();
+  if (!q) return false;
+  const hit = (state.conversations || []).find(
+    (c) => isVisibleFocus(c) && String(c.name || "").trim().toLowerCase() === q
+  );
+  if (!hit) return false;
+  if (typeof window.__closeIntelAuditOverlay === "function") window.__closeIntelAuditOverlay();
+  selectConvo(hit.id);
+  return true;
+};
 window.__grimoireDirective004 = {
   exportFocusDossier,
   createChildFocus,
@@ -11809,6 +11861,11 @@ async function runRoadmapCheck(check, { focusId = null } = {}) {
         c.result = ev.ok ? "pass" : "fail";
         c.evidence = `${c.path}: ${ev.evidence}`;
       }
+      console.debug(
+        `[roadmap-verify] ${c.result === "pass" ? "pass" : "fail"}`,
+        c.label || c.pattern || c.kind,
+        c.evidence
+      );
       return c;
     }
 
